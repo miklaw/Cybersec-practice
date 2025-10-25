@@ -127,6 +127,8 @@ $updateconfig = "config.zip"
 $updatesaltedfiles = "saltedfiles.zip"
 $webauth = "No"
 $clearlog = "yes" # Set to "yes" to clear the log file on startup
+$noexitonscriptcomplete = "no" # Set to "yes" to prevent exiting on script completion
+# Default script parameters. These can be overridden by the config file.
 $scriptparamfile = "$scriptpath\config\scriptparams.cfg"
 $scriptparams = @{
     randomusernumber           = "6"
@@ -447,7 +449,12 @@ foreach ($scriptFile in $availableScripts) {
             # For GUI-based scripts like setup and scorecard, run them in a new, separate process
             # to ensure stability and prevent the main dashboard from freezing.
             if ($functionName -in "Invoke-OpenScoreCard", "Invoke-CybersecSetup") {
-                $argumentList = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$scriptToRun`""
+                if ($noexitonscriptcomplete -eq "yes") {
+                    $argumentList = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$scriptToRun`""
+                } else {
+                    $argumentList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptToRun`""
+                }
+
                 # The setup script is designed to accept a log file path, but the scorecard script is not.
                 if ($scriptName -like "*setup.ps1") {
                     $argumentList += " -SetupLogFile `"$logfile`""

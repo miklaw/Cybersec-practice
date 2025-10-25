@@ -78,7 +78,7 @@ if (Test-Path $scriptparamfile) {
     # Load parameters from the config file
     $scriptparams = Get-Content -Path $scriptparamfile -Raw | ConvertFrom-StringData
     Log-Message "Successfully loaded parameters from '$scriptparamfile'." "INFO"
-    Write-Host "DEBUG: Loaded scriptparams: $((ConvertTo-Json -InputObject $scriptparams -Compress))"
+    #Write-Host "DEBUG: Loaded scriptparams: $((ConvertTo-Json -InputObject $scriptparams -Compress))"
     
     # Assign the loaded values to the script's variables
     # Ensure that if a key is missing from the config file, it doesn't cause an error.
@@ -734,6 +734,12 @@ $authorizedPrograms = $installed | Where-Object { $_.Type -eq 'safe' }
 $authorizedusers = $allTempUsers | Where-Object { $_.FakeAccount -eq '0' }
 $authorizedgroups = $randomGroups | Where-Object { $_.FakeGroup -eq '0' }
 
+# Pre-format the lists into strings to ensure correct expansion in the here-string
+$userList = ($authorizedusers | ForEach-Object { "  - $($_.Username): $($_.Password)" } | Out-String).Trim()
+$groupList = ($authorizedgroups | ForEach-Object { "  - $($_.Name)" } | Out-String).Trim()
+$programList = ($authorizedPrograms | ForEach-Object { "  - $($_.FriendlyName)" } | Out-String).Trim()
+
+
 Log-Message "Generating README file on desktop..." "INFO"
 Write-Host "Generating README file on desktop"
 $desktop = [Environment]::GetFolderPath("Desktop")
@@ -748,33 +754,32 @@ Your tasks include identifying vulnerabilities, analyzing user accounts and grou
 
 The following users have been authorized for use on this system and here are their passwords.  
 If passwords are weak, you must identify and change them to meet complexity requirements:
-$($authorizedusers | ForEach-Object { $_.Username } { $_.Password })
+$userList
 
 The following non-builtin groups have been authorized:
-$($authorizedgroups | ForEach-Object { $_.Name })
+$groupList
 
 The following programs have been authorized for installation:
-$($authorizedPrograms | ForEach-Object { $_.FriendlyName })
+$programList
 "@
 
-add-content -Path $readmePath -Value $readmecontent
+Set-Content -Path $readmePath -Value $readmecontent
 Log-Message "README file generated at $readmePath" "INFO"
 
 #endregion
 
-# Show completion message first, so it appears on top of the splash screen.
+# Close the splash screen
+$splashForm.Close()
+    Write-Host "DEBUG: Invoke-CybersecSetup function finished."
+    Log-Message "--- Finished Cybersec Practice Setup ---" "INFO"
+    # Show completion message first, so it appears on top of the splash screen.
 [System.Windows.Forms.MessageBox]::Show(
     "Setup is complete.",
     "Environment is ready",
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Information
 )
-
-# Close the splash screen
-$splashForm.Close()
-
-    Write-Host "DEBUG: Invoke-CybersecSetup function finished."
-    Log-Message "--- Finished Cybersec Practice Setup ---" "INFO"
+exit
 }
 
 # When the script is run directly, the $PSScriptRoot automatic variable is available.
