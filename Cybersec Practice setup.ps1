@@ -2,6 +2,10 @@ param (
     # This parameter allows the script to accept a log file path when run directly.
     [string]$SetupLogFile
 )
+# --- DEBUGGING ---
+# Set to $true to skip the entire program installation section for faster testing.
+$skipProgramInstalls = $true
+
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
 
 # Define a logging function that is available throughout the script.
@@ -92,7 +96,6 @@ if (Test-Path $scriptparamfile) {
     $randomunauthorizednumbers = $scriptparams.randomunauthorizednumbers
     $numberofbuiltingroups = $scriptparams.numberofbuiltingroups
     $passwordchangedate = $scriptparams.passwordchangedate
-    Write-Host "DEBUG: Assigned config values to script variables."
 } else {
     Write-Host "ERROR: Config file '$scriptparamfile' not found. Exiting."
     Log-Message "Configuration file '$scriptparamfile' not found. The script cannot continue without its settings." "ERROR"
@@ -175,7 +178,7 @@ while (-not (Test-Path $tempusersFile)) {
 #region MARK: Select Random Groups
 Log-Message "Selecting random groups from $sourceFile" "INFO"
 # Import RegularGroups from users.xlsx
-Get-ExcelSheetInfo -Path $sourceFile | Select-Object Name
+$null = Get-ExcelSheetInfo -Path $sourceFile
 $groups = Import-Excel -Path $sourceFile -WorksheetName 'RegularGroups'
 
 # Select random groups
@@ -252,7 +255,7 @@ foreach ($group in $groups) {
     $groupname = $group.Name
     # Check if group exists, if not, create it
     if (-not (Get-LocalGroup -Name $groupname -ErrorAction SilentlyContinue)) {
-        New-LocalGroup -Name $groupname
+        New-LocalGroup -Name $groupname | Out-Null
         Log-Message "Created group: $groupname" "INFO"
     } else {
         Log-Message "Group $groupname already exists. Skipping." "INFO"
@@ -264,7 +267,7 @@ foreach ($group in $groups) {
 Log-Message "Changing system date for password age verification..." "INFO"
 # This script changes the system date and time to a random date within the past year
 # Calculate a random date within the past year      net user $env:USERNAME
-Set-Date -Date $passwordchangedate -ErrorAction Stop
+Set-Date -Date $passwordchangedate -ErrorAction Stop | Out-Null
 Log-Message "System date and time changed to: $(Get-Date)" "INFO"
 
 #endregion
@@ -286,21 +289,21 @@ if (Test-Path $tempUsersFile) {
         $Weakpassword = $user.WeakPassword
         # Check if group exists, if not, create it
         if (-not (Get-LocalGroup -Name $groupname -ErrorAction SilentlyContinue)) {
-            New-LocalGroup -Name $groupname
+            New-LocalGroup -Name $groupname | Out-Null
             Log-Message "Created group: $groupname" "INFO"
         }
         
         # Check if user already exists
         if (-not (Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
             # Create the user account
-            New-LocalUser -Name $username -Password $password -FullName $fullName
+            New-LocalUser -Name $username -Password $password -FullName $fullName | Out-Null
             Log-Message "Created user: $username" "INFO"
             # Add user to group
-            Add-LocalGroupMember -Group $groupname -Member $username
+            Add-LocalGroupMember -Group $groupname -Member $username | Out-Null
             Log-Message "Added $username to group: $groupname" "INFO"
         } else {
             # Ensure that the user is a member of the group even if it already exists
-            Add-LocalGroupMember -Group $groupname -Member $username -ErrorAction SilentlyContinue
+            Add-LocalGroupMember -Group $groupname -Member $username -ErrorAction SilentlyContinue | Out-Null
             Log-Message "User $username already exists. Skipping creation, ensuring group membership." "INFO"
         }
     }
@@ -327,12 +330,20 @@ $tempProgramsDir = Join-Path $tempDir 'programs'
 if (-not (Test-Path $tempProgramsDir)) {
     New-Item -Path $tempProgramsDir -ItemType Directory | Out-Null
 }
+
+# Initialize a master list to hold all programs and policies for the installed.csv
+$allProgramsAndPolicies = @()
 #endregion
 
 #region MARK: Safe program Prep
 Log-Message "Preparing safe programs..." "DEBUG"
 # Get all files in programs\safe
 $programFiles = Get-ChildItem -Path $safeProgramsDir -File
+
+# Ensure $randomprogramnumbers is an integer
+if ($randomprogramnumbers -is [string]) {
+    $randomprogramnumbers = [int]$randomprogramnumbers
+}
 # Select random program files
 $randomPrograms = $programFiles | Get-Random -Count $randomprogramnumbers
 # Get program information for installation and verification
@@ -355,16 +366,20 @@ foreach ($program in $randomPrograms) {
     }
 }
 
-# Export the list of installed programs to temp\installed.csv
-$installedCsv = Join-Path $tempDir 'installed.csv'
-Log-Message "Safe programs selected: $($installedList.Filename -join ', ')" "DEBUG"
-$installedList | Export-Csv -Path $installedCsv -NoTypeInformation
+# Add to the master list
+$allProgramsAndPolicies += $installedList
+Log-Message "Safe programs selected: $($installedList.FriendlyName -join ', ')" "DEBUG"
 #endregion
 
 #region MARK: Unauthorized program Prep
 Log-Message "Preparing unauthorized programs..." "DEBUG"
 # Get all files in programs\unauthorized
 $programFiles = Get-ChildItem -Path $unauthorizedProgramsDir -File
+
+# Ensure $randomunauthorizednumbers is an integer
+if ($randomunauthorizednumbers -is [string]) {
+    $randomunauthorizednumbers = [int]$randomunauthorizednumbers
+}
 # Select random program files
 $randomUnauthorizedPrograms = $programFiles | Get-Random -Count $randomunauthorizednumbers
 # Get program information for installation and verification
@@ -387,15 +402,20 @@ foreach ($program in $randomUnauthorizedPrograms) {
     }
 }
 
-# Append the list of unauthorized programs to temp\installed.csv
-Log-Message "Unauthorized programs selected: $($installedList.Filename -join ', ')" "DEBUG"
-$installedList | Export-Csv -Path $installedCsv -NoTypeInformation -Append
+# Add to the master list
+$allProgramsAndPolicies += $installedList
+Log-Message "Unauthorized programs selected: $($installedList.FriendlyName -join ', ')" "DEBUG"
 #endregion
 
 #region MARK: Malware program prep
 Log-Message "Preparing malware programs..." "DEBUG"
 # Get all files in programs\malware
 $malwareFiles = Get-ChildItem -Path $malwareProgramsDir -File
+
+# Ensure $randommalwarenumbers is an integer
+if ($randommalwarenumbers -is [string]) {
+    $randommalwarenumbers = [int]$randommalwarenumbers
+}
 # Select random malware files
 $randomMalware = $malwareFiles | Get-Random -Count $randommalwarenumbers
 
@@ -419,14 +439,20 @@ foreach ($malware in $randomMalware) {
     }
 }
 
-# Append the list of malware programs to temp\installed.csv
-$malwareList | Export-Csv -Path $installedCsv -NoTypeInformation -Append
+# Add to the master list
+$allProgramsAndPolicies += $malwareList
+Log-Message "Malware programs selected: $($malwareList.FriendlyName -join ', ')" "DEBUG"
 #endregion
 
 #region MARK: Manual malware program prep
 Log-Message "Preparing manual malware..." "DEBUG"
 # Get list of manual malware and install random based on $randommanualmalwarenumbers
 $manualmalware = Get-ChildItem -Path $manualmalwareProgramsDir -Directory -Name 
+
+# Ensure $randommanualmalwarenumbers is an integer
+if ($randommanualmalwarenumbers -is [string]) {
+    $randommanualmalwarenumbers = [int]$randommanualmalwarenumbers
+}
 
 # Select random manual malware folders
 $RandomManualMalware = $manualmalware | Get-Random -Count $randommanualmalwarenumbers
@@ -453,16 +479,19 @@ foreach ($manualmalware in $RandomManualMalware) {
     }
 }
 
-# Append the list of malware programs to temp\installed.csv
-$manualmalwareList | Export-Csv -Path $installedCsv -NoTypeInformation -Append
+# Add to the master list
+$allProgramsAndPolicies += $manualmalwareList
+Log-Message "Manual malware selected: $($manualmalwareList.FriendlyName -join ', ')" "DEBUG"
 #endregion
 
 
 #region MARK: Temp Files
 # Get list of temp files for verification from programs.xlsx
 Log-Message "Adding temp files for verification from $programsconfig" "INFO"
-$tempverification = Import-Excel -Path $programsconfig -WorksheetName 'Tempfiles'
-# Get list of manual malware and install random based on $randommanualmalwarenumbers
+
+# Ensure $programsconfig is loaded correctly
+$programsExcel = Import-Excel -Path $programsconfig -WorksheetName 'Tempfiles'
+$tempverification = $programsExcel # Use the loaded data
 
 # Get program information for installation and verification
 $tempfileList = @()
@@ -485,9 +514,138 @@ foreach ($tempfile in $tempverification) {
     }
 }
 Log-Message "Temp file list created with $($tempfileList.Count) items." "DEBUG"
-# Append the list of malware programs to temp\installed.csv
-$tempfilelist | Export-Csv -Path $installedCsv -NoTypeInformation -Append
+# Add to the master list
+$allProgramsAndPolicies += $tempfileList
 #endregion
+
+#region MARK: Generate Security Policy Settings
+Log-Message "Generating random security policy settings..." "INFO"
+# Random number between 8 and 12 for minimum password length
+$minPasswordLength = Get-Random -Minimum 8 -Maximum 12
+# Random password age limits
+$maxPasswordAge = Get-Random -Minimum 30 -Maximum 90
+$minPasswordAge = Get-Random -Minimum 1 -Maximum 7
+# Random account lockout settings
+$lockoutDuration = Get-Random -Minimum 5 -Maximum 30
+$lockoutThreshold = Get-Random -Minimum 3 -Maximum 5
+$lockoutWindow = Get-Random -Minimum 5 -Maximum 30
+
+$secpolObjects = @()
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'MinimumPasswordLength'
+    Type         = 'PasswordPolicy'
+    Hardmode = ''
+    FriendlyName = 'Minimum Password Length'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$minPasswordLength"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'MaximumPasswordAge'
+    Type         = 'PasswordPolicy'
+    Hardmode = ''
+    FriendlyName = 'Maximum Password Age'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$maxPasswordAge"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'MinimumPasswordAge'
+    Type         = 'PasswordPolicy'
+    Hardmode = ''
+    FriendlyName = 'Minimum Password Age'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$minPasswordAge"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'LockoutDuration'
+    Type         = 'PasswordPolicy'
+    Hardmode = ''
+    FriendlyName = 'Account Lockout Duration'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$lockoutDuration"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'LockoutThreshold'
+    Type         = 'PasswordPolicy'
+    Hardmode = ''
+    FriendlyName = 'Account Lockout Threshold'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$lockoutThreshold"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'LockoutWindow'
+    Type         = 'PasswordPolicy'
+    Hardmode     = ''
+    FriendlyName = 'Lockout observation window'
+    Silent = ''
+    Wait = ''
+    DetectionMethod = 'Policy'
+    Detection = "$lockoutWindow"
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+$secpolObjects += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'ComplexityRequirements'
+    Type         = 'PasswordPolicy'
+    Hardmode     = ''
+    FriendlyName = 'Password Complexity Requirements'
+    Silent       = ''
+    Wait         = ''
+    DetectionMethod = 'Policy'
+    Detection       = 'Enabled'
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
+
+# Add the generated security policy objects to the master list
+$allProgramsAndPolicies += $secpolObjects
+Log-Message "Generated $($secpolObjects.Count) security policy objects." "DEBUG"
+#endregion
+
+# Export the combined list of programs and policies to installed.csv for the first time
+$installedCsv = Join-Path $tempDir 'installed.csv'
+$allProgramsAndPolicies | Export-Csv -Path $installedCsv -NoTypeInformation
+Log-Message "Initial export of all programs and policies to '$installedCsv'." "INFO"
 
 #region MARK: Enrich installed.csv with program config data
 Log-Message "Enriching installed.csv with data from $programsconfig" "INFO"
@@ -495,32 +653,40 @@ Log-Message "Enriching installed.csv with data from $programsconfig" "INFO"
 $installed = Import-Csv -Path $installedCsv
 $programs = Import-Excel -Path $programsconfig -WorksheetName 'Software'
 
-# Enrich installed list with Silent and Verification from programs.xlsx
-foreach ($item in $installed) {
-    $program = $programs | Where-Object { $_.Filename -eq $item.Filename }
-    if ($program) {
-        $item.FriendlyName = $program.FriendlyName
-        $item.Hardmode = $program.Hardmode
-        $item.Silent = $program.Silent
-        $item.Wait = $program.Wait
-        $item.DetectionMethod = $program.DetectionMethod
-        $item.Detection = "$($program.Detection)"
-        $item.HardmodeDetectionType = $program.HardmodeDetectionType
-        $item.HardmodeDetection = "$($program.HardmodeDetection)"
-        $item.Hardmode2DetectionType = $program.Hardmode2DetectionType
-        $item.Hardmode2Detection = "$($program.Hardmode2Detection)"
+# Filter out policy objects before enriching, as they don't have corresponding entries in programs.xlsx
+$programsToEnrich = $installed | Where-Object { $_.Type -ne 'PasswordPolicy' }
+
+# Enrich program list with Silent and Verification from programs.xlsx
+foreach ($item in $programsToEnrich) {
+    $programConfig = $programs | Where-Object { $_.Filename -eq $item.Filename }
+    if ($programConfig) {
+        $item.FriendlyName = $programConfig.FriendlyName
+        $item.Hardmode = $programConfig.Hardmode
+        $item.Silent = $programConfig.Silent
+        $item.Wait = $programConfig.Wait
+        $item.DetectionMethod = $programConfig.DetectionMethod
+        $item.Detection = "$($programConfig.Detection)"
+        $item.HardmodeDetectionType = $programConfig.HardmodeDetectionType
+        $item.HardmodeDetection = "$($programConfig.HardmodeDetection)"
+        $item.Hardmode2DetectionType = $programConfig.Hardmode2DetectionType
+        $item.Hardmode2Detection = "$($programConfig.Hardmode2Detection)"
     }
 }
-# Export the updated installed list back to installed.csv
+
+# Recombine enriched programs with policy objects
+$policyObjects = $installed | Where-Object { $_.Type -eq 'PasswordPolicy' }
+$installed = $programsToEnrich + $policyObjects
+
+# Export the final, enriched list (programs + policies) back to installed.csv
 $installed | Export-Csv -Path $installedCsv -NoTypeInformation
-Log-Message "Enriched installed.csv with data from program config." "INFO"
+Log-Message "Final enriched installed.csv (programs and policies) exported." "INFO"
 #endregion
 
 #region MARK: Sync system time
 # Sync system time with internet time server.  This is used to detect the password change date for users.
 Log-Message "Syncing system time with internet time server..." "INFO"
 try {
-    Start-Process w32tm -ArgumentList "/resync" -NoNewWindow -Wait
+    Start-Process w32tm -ArgumentList "/resync" -NoNewWindow -Wait -RedirectStandardOutput $null
     Log-Message "System time synced successfully." "INFO"
 } catch {
     Log-Message "Failed to sync system time. Please run this script with administrative privileges." "ERROR"
@@ -533,184 +699,115 @@ Copy-Item -Path "$PSScriptRoot\Saltedfiles\*" -Destination "$env:APPDATA\Local\M
 
 #endregion
 
-#region MARK: Set Secpol standards for verification
-Log-Message "Setting security policies for verification..." "INFO"
-# This is section will generate random standards that will be used for verification
-Write-Host "Setting security policies for verification"
-# Random number between 8 and 12 for minimum password length
-$minPasswordLength = Get-Random -Minimum 8 -Maximum 12
-# Random password age limits
-$maxPasswordAge = Get-Random -Minimum 30 -Maximum 90
-$minPasswordAge = Get-Random -Minimum 1 -Maximum 7
-# Random account lockout settings
-$lockoutDuration = Get-Random -Minimum 5 -Maximum 30
-$lockoutThreshold = Get-Random -Minimum 3 -Maximum 5
-$lockoutWindow = Get-Random -Minimum 5 -Maximum 30
-
-# Add data to a new line in $installedCsv
-$secpolSettings = @"
-# Security Policy Settings
-MinimumPasswordLength = $minPasswordLength
-MaximumPasswordAge = $maxPasswordAge
-MinimumPasswordAge = $minPasswordAge
-LockoutDuration = $lockoutDuration
-LockoutThreshold = $lockoutThreshold
-LockoutWindow = $lockoutWindow
-"@
-Add-Content -Path $installedCsv -Value $secpolSettings
-Write-Host "Security policy settings added to $installedCsv"
-
-# Disable Windows Firewall for testing purposes
-Write-Host "Disabling Windows Firewall for testing purposes"
+#region MARK: Disable Windows Firewall
+Log-Message "Disabling Windows Firewall for testing purposes..." "INFO"
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 Log-Message "Windows Firewall disabled for all profiles." "WARN"
-
-
-
-<# Set password policy to require complex passwords
-secedit /export /cfg "$PSScriptRoot\temp\secpol.cfg" /quiet
-# Modify the exported file to set password complexity
-(Get-Content "$PSScriptRoot\temp\secpol.cfg") -replace 'PasswordComplexity = 0', 'PasswordComplexity = 1' | Set-Content "$PSScriptRoot\config\secpol.cfg"
-# Import the modified security policy
-secedit /import /cfg "$PSScriptRoot\config\secpol.cfg" /quiet
-secedit /configure /db secedit.sdb /cfg "$PSScriptRoot\config\secpol.cfg" /quiet
-Write-Host "Security policies set" 
-#>
-
-
 
 #endregion
 
 
 #region MARK: Install Programs
-# MARK: Install Safe programs
-Log-Message "Starting program installation phase..." "INFO"
-$installed = Import-Csv -Path $installedCsv
-Foreach ($program in $installed) {
-    if ($program.Type -eq 'safe') {
-        $programPath = $program.OriginalPath
-        $wait = $program.Wait
-        $silentArgs = $program.Silent
-        if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
-            $silentArgs = $silentArgs.Substring(1)
+if ($skipProgramInstalls) {
+    Log-Message "Skipping program installations as per `$skipProgramInstalls` setting." "WARN"
+} else {
+    # MARK: Install Safe programs
+    Log-Message "Starting program installation phase..." "INFO"
+    $installed = Import-Csv -Path $installedCsv
+    Foreach ($program in $installed) {
+        if ($program.Type -eq 'safe') {
+            $programPath = $program.OriginalPath
+            $wait = $program.Wait
+            $silentArgs = $program.Silent
+            if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
+                $silentArgs = $silentArgs.Substring(1)
+            }
+            Log-Message "Installing $($program.Filename)..." "INFO"
+            if ($programPath -like '*.msi') {
+                Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
+                    }else {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
+                    }
+            }else{
+                Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
+                    }else {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                    }
+            }
+            
+            Log-Message "$($program.Filename) installation completed." "INFO"
         }
-        Log-Message "Installing $($program.Filename)..." "INFO"
-        if ($programPath -like '*.msi') {
-            Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
-                }else {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
-                }
-        }else{
-            Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
-                }else {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs
-                }
-        }
-        
-        Log-Message "$($program.Filename) installation completed." "INFO"
     }
-}
 
-# MARK: Install Manual malware programs
-Log-Message "Installing selected manual malware programs..." "INFO"
-$installed = Import-Csv -Path $installedCsv
-Foreach ($program in $installed) {
-    if ($program.Type -eq 'manualmalware') {
-         $programPath = $program.OriginalPath
-        $wait = $program.Wait
-        $silentArgs = $program.Silent
-        if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
-            $silentArgs = $silentArgs.Substring(1)
+    # MARK: Install Manual malware programs
+    Log-Message "Installing selected manual malware programs..." "INFO"
+    $installed = Import-Csv -Path $installedCsv
+    Foreach ($program in $installed) {
+        if ($program.Type -eq 'manualmalware') {
+             $programPath = $program.OriginalPath
+            $wait = $program.Wait
+            $silentArgs = $program.Silent
+            if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
+                $silentArgs = $silentArgs.Substring(1)
+            }
+            Log-Message "Installing $($program.Filename)..." "INFO"
+            if ($programPath -like '*.msi') {
+                Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
+                    }else {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
+                    }
+            }else{
+                Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
+                    }else {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                    }
+            }
+            
+            Log-Message "$($program.Filename) installation completed." "INFO"
         }
-        Log-Message "Installing $($program.Filename)..." "INFO"
-        if ($programPath -like '*.msi') {
-            Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
-                }else {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
-                }
-        }else{
-            Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
-                }else {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs
-                }
-        }
-        
-        Log-Message "$($program.Filename) installation completed." "INFO"
     }
-}
 
-# MARK: Install Malware programs
-Log-Message "Installing selected malware programs..." "INFO"
-$installed = Import-Csv -Path $installedCsv
-Foreach ($program in $installed) {
-    if ($program.Type -eq 'malware') {
-         $programPath = $program.OriginalPath
-        $wait = $program.Wait
-        $silentArgs = $program.Silent
-        if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
-            $silentArgs = $silentArgs.Substring(1)
+    # MARK: Install Malware programs
+    Log-Message "Installing selected malware programs..." "INFO"
+    $installed = Import-Csv -Path $installedCsv
+    Foreach ($program in $installed) {
+        if ($program.Type -eq 'malware') {
+             $programPath = $program.OriginalPath
+            $wait = $program.Wait
+            $silentArgs = $program.Silent
+            if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
+                $silentArgs = $silentArgs.Substring(1)
+            }
+            Log-Message "Installing $($program.Filename)..." "INFO"
+            if ($programPath -like '*.msi') {
+                Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
+                    }else {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
+                    }
+            }else{
+                Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
+                    }else {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                    }
+            }
+            
+            Log-Message "$($program.Filename) installation completed." "INFO"
         }
-        Log-Message "Installing $($program.Filename)..." "INFO"
-        if ($programPath -like '*.msi') {
-            Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
-                }else {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
-                }
-        }else{
-            Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
-                }else {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs
-                }
-        }
-        
-        Log-Message "$($program.Filename) installation completed." "INFO"
     }
+    Log-Message "Finished program installations." "INFO"
 }
-
-# MARK: Install Unauthorized programs
-Log-Message "Installing Unauthorized programs..." "INFO"
-$installed = Import-Csv -Path $installedCsv
-Foreach ($program in $installed) {
-    if ($program.Type -eq 'unauthorized') {
-        $programPath = $program.OriginalPath
-        $wait = $program.Wait
-        $silentArgs = $program.Silent
-        if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
-            $silentArgs = $silentArgs.Substring(1)
-        }
-        Log-Message "Installing $($program.Filename)..." "INFO"
-        if ($programPath -like '*.msi') {
-            Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
-                }else {
-                    Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
-                }
-        }else{
-            Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
-                If ($wait -eq 'Wait') {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
-                }else {
-                    Start-Process -FilePath $programPath -ArgumentList $silentArgs
-                }
-        }
-        
-        Log-Message "$($program.Filename) installation completed." "INFO"
-    }
-}
-Log-Message "Finished program installations." "INFO"
 #endregion
 
 
@@ -721,7 +818,7 @@ Log-Message "Resetting system date and time..." "INFO"
 # Set the system date and time back to current (requires admin privileges)
 try {
     # Start-Process w32tm -ArgumentList "/config /manualpeerlist:"time.windows.com,0x1" /syncfromflags:manual /reliable:yes /update"
-    Set-Date -Date (Get-Date) -ErrorAction Stop
+    Set-Date -Date (Get-Date) -ErrorAction Stop | Out-Null
     Log-Message "System date and time reset to current date and time." "INFO"
 } catch {
     Log-Message "Failed to reset system date and time. Please run this script with administrative privileges." "ERROR"
@@ -741,7 +838,6 @@ $programList = ($authorizedPrograms | ForEach-Object { "  - $($_.FriendlyName)" 
 
 
 Log-Message "Generating README file on desktop..." "INFO"
-Write-Host "Generating README file on desktop"
 $desktop = [Environment]::GetFolderPath("Desktop")
 $readmePath = Join-Path $desktop 'README.txt'
 $readmecontent = @"
@@ -761,6 +857,15 @@ $groupList
 
 The following programs have been authorized for installation:
 $programList
+
+The company demands that a password policy be enforced.  The current password policy settings are as follows:
+- Minimum Password Length: $minPasswordLength characters
+- Maximum Password Age: $maxPasswordAge days
+- Minimum Password Age: $minPasswordAge days
+- Password must meet complexity requirements: Enabled
+- Lockout Duration: $lockoutDuration Minutes
+- Lockout Threshold: $lockoutThreshold attempts
+- Reset account lockout counter after: $lockoutWindow Minutes
 "@
 
 Set-Content -Path $readmePath -Value $readmecontent

@@ -98,6 +98,37 @@ catch {
 # Initialize an empty array to hold the results of our checks.
 $scoreResults = @()
 
+# Get current local security policy settings by parsing 'net accounts'
+$liveSecPol = @{}
+try {
+    $netAccountsOutput = net accounts
+    $netAccountsOutput | ForEach-Object {
+        if ($_ -match ':\s*(.+)$') {
+            $key = ($_.Split(':')[0]).Trim()
+            $value = $Matches[1].Trim()
+            if ($value -ne "Never") { $value = ($value -split " ")[0] } # Extract numbers
+            $liveSecPol[$key] = $value
+        }
+    }
+    Log-Message "Successfully parsed live security policy settings from 'net accounts'." "INFO"    
+    # On newer Windows versions, 'net accounts' does not show complexity. Use secedit as a fallback.
+    $tempSecPolFile = Join-Path $tempDir "secpol.cfg"
+    secedit /export /cfg $tempSecPolFile /quiet
+    if (Test-Path $tempSecPolFile) {
+        $secpolContent = Get-Content $tempSecPolFile
+        $complexityLine = $secpolContent | Select-String -Pattern "PasswordComplexity"
+        if ($complexityLine -match "=\s*1") {
+            $liveSecPol['Password must meet complexity requirements'] = 'Enabled'
+            Log-Message "Secedit check: Password complexity is Enabled." "DEBUG"
+        } else {
+            $liveSecPol['Password must meet complexity requirements'] = 'Disabled'
+            Log-Message "Secedit check: Password complexity is Disabled." "DEBUG"
+        }
+        Remove-Item $tempSecPolFile -Force
+    }
+} catch {
+    Log-Message "Failed to parse security policy settings. Scoring may be incomplete. Error: $($_.Exception.Message)" "ERROR"
+}
 # Loop through each program from the imported CSV file.
 foreach ($program in $installedPrograms) {
     
@@ -136,6 +167,33 @@ foreach ($program in $installedPrograms) {
                 Log-Message "[STANDARD CHECK] 'Detection' path is empty in the CSV. Skipping." "DEBUG"
             }
         }
+        # --- MARK: Password Policy Detection Logic ---
+        elseif ($program.Type -eq 'PasswordPolicy') {
+            $policyName = $program.Filename
+            $expectedValue = $program.Detection
+            $actualValue = $null
+
+            # Map CSV Filename to the key from 'net accounts' output
+            $policyKeyMap = @{
+                'MinimumPasswordLength' = 'Minimum password length'
+                'MaximumPasswordAge'    = 'Maximum password age (days)'
+                'MinimumPasswordAge'    = 'Minimum password age (days)'
+                'LockoutDuration'       = 'Lockout duration (minutes)'
+                'LockoutThreshold'      = 'Lockout threshold'
+                'LockoutWindow'         = 'Lockout observation window (minutes)'
+                'ComplexityRequirements'= 'Password must meet complexity requirements'
+            }
+
+            if ($liveSecPol.ContainsKey($policyKeyMap[$policyName])) {
+                $actualValue = $liveSecPol[$policyKeyMap[$policyName]]
+                if ($actualValue -eq $expectedValue) {
+                    $result = 1
+                }
+            }
+            Log-Message "[POLICY CHECK] Policy: '$policyName'. Expected: '$expectedValue', Actual: '$actualValue'. Result: $result" "DEBUG"
+
+        }
+        
 
         # --- MARK: Hardmode Software Detection Logic ---
         if ($program.Hardmode -eq 'yes') {
@@ -194,17 +252,6 @@ foreach ($program in $installedPrograms) {
     catch {
         Log-Message "An unexpected error occurred while processing '$($program.FriendlyName)'. Error: $($_.Exception.Message). This program will be skipped." "ERROR"
     }
-}
-
-# --- MARK: Export Software Results ---
-# After the loop has finished processing all programs, export the entire results array to a CSV file.
-if ($null -ne $scoreResults -and $scoreResults.Count -gt 0) {
-    Log-Message "Exporting $($scoreResults.Count) results to '$scoreFile'..." "INFO"
-    $scoreResults | Export-Csv -Path $scoreFile -NoTypeInformation
-    Log-Message "Software scoring complete." "INFO"
-}
-else {
-    Log-Message "No software results were generated to export. The output file will be empty." "WARN"
 }
 
 ##############################################################################################
@@ -348,14 +395,6 @@ foreach ($user in $GeneratedUsers) {
     }
 }
 
-# Export all results after processing users
-if ($null -ne $scoreResults -and $scoreResults.Count -gt 0) {
-    Log-Message "Exporting $($scoreResults.Count) user/group results to '$scoreFile'..." "INFO"
-    $scoreResults | Export-Csv -Path $scoreFile -NoTypeInformation
-    Log-Message "User and group scoring complete." "INFO"
-} else {
-    Log-Message "No user/group results were generated to export." "WARN"
-}
 #endregion
 
 ##############################################################################################
@@ -428,8 +467,8 @@ foreach ($group in $GeneratedGroups) {
             continue
         }
 
-        Write-host "Group: $($group.Name)"
-        Write-host "Fake Group: $($group.Fakegroup)"
+        #Write-host "Group: $($group.Name)"
+        #Write-host "Fake Group: $($group.Fakegroup)"
         $object = [PSCustomObject]@{
             FriendlyName    = $group.Name   
             Type            = "Group"        
@@ -445,15 +484,8 @@ foreach ($group in $GeneratedGroups) {
     }
 }
 
-# Export all results after processing users
-if ($null -ne $scoreResults -and $scoreResults.Count -gt 0) {
-    Log-Message "Exporting $($scoreResults.Count) total results to '$scoreFile'..." "INFO"
-    $scoreResults | Export-Csv -Path $scoreFile -NoTypeInformation
-    Log-Message "Final scoring export complete." "INFO"
-} else {
-    Log-Message "No results were generated to export." "WARN"
-}
 #endregion
+
 
 ##############################################################################################
 #region MARK: Firewall and Network Scoring
@@ -482,6 +514,21 @@ catch {
 }
 #endregion
 
+#region MARK: Final Score Export
+# Export all collected results after all scoring sections are complete.
+if ($null -ne $scoreResults -and $scoreResults.Count -gt 0) {
+    Log-Message "Exporting $($scoreResults.Count) total results to '$scoreFile'..." "INFO"
+    try {
+        $scoreResults | Export-Csv -Path $scoreFile -NoTypeInformation -Force
+        Log-Message "Final scoring export complete." "INFO"
+    } catch {
+        Log-Message "Failed to export final scores to '$scoreFile'. Error: $($_.Exception.Message)" "ERROR"
+    }
+} else {
+    Log-Message "No results were generated to export. The output file will be empty." "WARN"
+}
+#endregion
+
 # Close the "in progress" form before showing the final scorecard.
 $progressForm.Close()
 $progressForm.Dispose()
@@ -504,7 +551,7 @@ $form.Controls.Add($mainPanel)
 
 # --- Add Instructions at the Top ---
 $instructionsLabel = New-Object System.Windows.Forms.Label
-$instructionsLabel.Text = "Review each section carefully. Completed means passed, X means failed. Fake entries are highlighted."
+$instructionsLabel.Text = "Review each section carefully. Completed means passed, Incomplete means you missed something. Blank columns mean there was nothing else to check. Fake entries are highlighted."
 $instructionsLabel.Font = New-Object System.Drawing.Font("Arial", 12, [System.Drawing.FontStyle]::Italic)
 $instructionsLabel.ForeColor = "DarkGreen"
 $instructionsLabel.AutoSize = $true
@@ -521,31 +568,20 @@ catch {
     exit
 }
 
-# --- Filter for Fake Users and Fake Groups ---
-$fakeUsers = $data | Where-Object { $_.Type -eq "User" -and $_.DetectionMethod -eq "1" }
-$fakeGroups = $data | Where-Object { $_.Type -eq "Group" -and $_.DetectionMethod -eq "1" }
-
-# --- Remove Fake entries from main data to avoid duplication ---
-$data = $data | Where-Object {
-    !($_.Type -eq "User" -and $_.DetectionMethod -eq "1") -and
-    !($_.Type -eq "Group" -and $_.DetectionMethod -eq "1")
-}
-
-# --- Group the remaining data by Type ---
+# --- Group all data by Type for display ---
 $groupedData = $data | Group-Object -Property Type
 
 # --- Helper Function to Add a Data Section ---
 function Add-DataSection {
     param (
         [string]$sectionTitle,
-        [array]$sectionData,
-        [bool]$isFake = $false
+        [array]$sectionData
     )
 
     $headerLabel = New-Object System.Windows.Forms.Label
     $headerLabel.Text = $sectionTitle
     $headerLabel.Font = New-Object System.Drawing.Font("Arial", 14, [System.Drawing.FontStyle]::Bold)
-    $headerLabel.ForeColor = if ($isFake) { "Red" } else { "Blue" }
+    $headerLabel.ForeColor = "Blue"
     $headerLabel.AutoSize = $true
     $headerLabel.Margin = "10, 10, 10, 0"
     $mainPanel.Controls.Add($headerLabel)
@@ -566,18 +602,28 @@ function Add-DataSection {
 $lowerTitle = $sectionTitle.ToLower()
 
 if ($lowerTitle.Contains("user")) {
-    $accountColumn = if ($lowerTitle.Contains("fake")) { "Account Removed" } else { "Account Exists" }
     $dataGridView.Columns.Add("FriendlyName", "Username")
-    $dataGridView.Columns.Add("Result", $accountColumn)
+    $dataGridView.Columns.Add("Result", "Status")
     $dataGridView.Columns.Add("HardmodeResult", "Group Membership")
     $dataGridView.Columns.Add("Hardmode2Result", "Weak Password Fixed") # Placeholder for future use
 }
 elseif ($lowerTitle.Contains("group")) {
-    $groupColumn = if ($lowerTitle.Contains("fake")) { "Group Removed" } else { "Group Exists" }
     $dataGridView.Columns.Add("FriendlyName", "Group Name")
-    $dataGridView.Columns.Add("Result", $groupColumn)
+    $dataGridView.Columns.Add("Result", "Status")
     $dataGridView.Columns.Add("HardmodeResult", " ")
     $dataGridView.Columns.Add("Hardmode2Result", " ") # Placeholder for future use
+}
+elseif ($lowerTitle.Contains("passwordpolicy")) {
+    $dataGridView.Columns.Add("FriendlyName", "Policy Setting")
+    $dataGridView.Columns.Add("Result", "Status")
+    $dataGridView.Columns.Add("HardmodeResult", " ")
+    $dataGridView.Columns.Add("Hardmode2Result", " ")
+}
+elseif ($lowerTitle.Contains("firewall")) {
+    $dataGridView.Columns.Add("FriendlyName", "Firewall Setting")
+    $dataGridView.Columns.Add("Result", "Status")
+    $dataGridView.Columns.Add("HardmodeResult", " ")
+    $dataGridView.Columns.Add("Hardmode2Result", " ")
 }
 else {
     $dataGridView.Columns.Add("FriendlyName", "FriendlyName")
@@ -587,17 +633,33 @@ else {
 }
 
     foreach ($item in $sectionData) {
-        $icon = if ($sectionTitle -eq "FAKE USERS") { "👤" } elseif ($sectionTitle -eq "FAKE GROUPS") { "👥" } else { "" }
+        # Determine if the current item is a "fake" one
+        $isFakeItem = ($item.Type -eq "User" -or $item.Type -eq "Group") -and ($item.DetectionMethod -eq "1")
+
+        $icon = if ($isFakeItem) { " decoy" } else { "" }
         $friendlyName = "$icon $($item.FriendlyName)"
-        $result = if ($item.Result -eq "1") { "Completed" } elseif ($item.Result -eq "0") { "Incomplete" }  else { $item.Result }
+
+        # Adjust the 'Result' text based on whether it's a fake item
+        $resultText = if ($item.Result -eq "1") { "Completed" } elseif ($item.Result -eq "0") { "Incomplete" } else { $item.Result }
+        if ($isFakeItem) {
+            $resultText = if ($item.Result -eq "1") { "Removed" } else { "Not Removed" }
+        }
+
         $hmResult = if ($item.HardmodeResult -eq "1") { "Completed" } elseif ($item.HardmodeResult -eq "0") { "Incomplete" } else { $item.HardmodeResult }
         $hm2Result = if ($item.Hardmode2Result -eq "1") { "Completed" } elseif ($item.Hardmode2Result -eq "0") { "Incomplete" } else { $item.Hardmode2Result }
 
-        $dataGridView.Rows.Add($friendlyName, $result, $hmResult, $hm2Result) | Out-Null
+        $dataGridView.Rows.Add($friendlyName, $resultText, $hmResult, $hm2Result) | Out-Null
 
-        if ($isFake) {
+        # Highlight the row if it's a fake item
+        if ($isFakeItem) {
             $rowIndex = $dataGridView.Rows.Count - 1
-            $dataGridView.Rows[$rowIndex].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightPink
+            # If the fake item was successfully removed, highlight in green. Otherwise, pink.
+            if ($item.Result -eq "1") {
+                $dataGridView.Rows[$rowIndex].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightGreen
+            } else {
+                $dataGridView.Rows[$rowIndex].DefaultCellStyle.BackColor = [System.Drawing.Color]::LightPink
+            }
+            $dataGridView.Rows[$rowIndex].Cells[0].Value = "[X] $($item.FriendlyName)" # Mark fake items with [X]
         }
     }
 
@@ -613,16 +675,7 @@ else {
     $mainPanel.Controls.Add($dataGridView)
 }
 
-# --- Add Fake Sections First ---
-if ($fakeUsers.Count -gt 0) {
-    Add-DataSection -sectionTitle "FAKE USERS" -sectionData $fakeUsers -isFake $true
-}
-
-if ($fakeGroups.Count -gt 0) {
-    Add-DataSection -sectionTitle "FAKE GROUPS" -sectionData $fakeGroups -isFake $true
-}
-
-# --- Add Regular Sections ---
+# --- Add All Sections from Grouped Data ---
 foreach ($group in $groupedData) {
     Add-DataSection -sectionTitle $group.Name.ToUpper() -sectionData $group.Group
 }
@@ -637,7 +690,7 @@ function Count-Checks {
     return $count
 }
 
-$allItems = $data + $fakeUsers + $fakeGroups
+$allItems = Import-Csv -Path $scorefile # Re-import all items to ensure totals are correct
 
 $totalResult     = Count-Checks ($allItems | Select-Object -ExpandProperty Result) "1"
 $totalHardmode   = Count-Checks ($allItems | Select-Object -ExpandProperty HardmodeResult) "1"
