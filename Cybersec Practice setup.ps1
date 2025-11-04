@@ -4,9 +4,9 @@ param (
 )
 # --- DEBUGGING ---
 # Set to $true to skip the entire program installation section for faster testing.
-$skipProgramInstalls = $true
-
+$skipProgramInstalls = $false
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
+Write-Host "DEBUG: Defining Log-Message function..."
 
 # Define a logging function that is available throughout the script.
 # This ensures that when run standalone, it can log to the file passed by Start.ps1.
@@ -20,6 +20,9 @@ function Log-Message {
     $resolvedLogFile = if (-not [string]::IsNullOrEmpty($SetupLogFile)) { $SetupLogFile } else { Join-Path $logDir 'setup.log' }
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$type] $message" | Add-Content -Path $resolvedLogFile
 }
+
+Write-Host "DEBUG: Finished defining Log-Message function..."
+Write-Host "DEBUG: Defining Invoke-CybersecSetup function..."
 
 function Invoke-CybersecSetup {
     param(
@@ -96,6 +99,7 @@ if (Test-Path $scriptparamfile) {
     $randomunauthorizednumbers = $scriptparams.randomunauthorizednumbers
     $numberofbuiltingroups = $scriptparams.numberofbuiltingroups
     $passwordchangedate = $scriptparams.passwordchangedate
+    $randomscheduledtasks = $scriptparams.randomscheduledtasks
 } else {
     Write-Host "ERROR: Config file '$scriptparamfile' not found. Exiting."
     Log-Message "Configuration file '$scriptparamfile' not found. The script cannot continue without its settings." "ERROR"
@@ -461,7 +465,7 @@ $RandomManualMalware = $manualmalware | Get-Random -Count $randommanualmalwarenu
 $manualmalwareList = @()
 foreach ($manualmalware in $RandomManualMalware) {
     $sourcePath = Join-Path $manualmalwareProgramsDir $manualmalware
-    Log-Message "Manual malware selected: $manualmalware" "DEBUG"
+    Log-Message "Manual malware selected: $manualmalware" "DEBUG" # Closing parenthesis was missing here
     $manualmalwareList += [PSCustomObject]@{
         OriginalPath = Join-Path $sourcePath '\Invoke-AppDeployToolkit.exe'
         Filename     = $manualmalware
@@ -489,33 +493,33 @@ Log-Message "Manual malware selected: $($manualmalwareList.FriendlyName -join ',
 # Get list of temp files for verification from programs.xlsx
 Log-Message "Adding temp files for verification from $programsconfig" "INFO"
 
-# Ensure $programsconfig is loaded correctly
-$programsExcel = Import-Excel -Path $programsconfig -WorksheetName 'Tempfiles'
-$tempverification = $programsExcel # Use the loaded data
+# Create the specific temporary file for removal check
+$tempFilePath = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\User Data\Default\Cache\CacheNotClear.txt"
+$tempFileDir = Split-Path $tempFilePath -Parent
+Log-Message "Creating temporary file for removal check: $tempFilePath" "INFO"
 
-# Get program information for installation and verification
-$tempfileList = @()
-foreach ($tempfile in $tempverification) {
-    Log-Message "Temp file verification added: $($tempfile.FriendlyName)" "DEBUG"
-    $tempfileList += [PSCustomObject]@{
-        OriginalPath = "Temporary Internet Files"
-        Filename     = "Temporary Internet Files"
-        Type         = "Tempfiles"
-        Hardmode = $tempfile.Hardmode
-        FriendlyName = $tempfile.FriendlyName
-        Silent = ''
-        Wait = ''
-        DetectionMethod = $tempfile.DetectionMethod
-        Detection = $tempfile.Detection
-        HardmodeDetectionType = $tempfile.HardmodeDetectionType
-        HardmodeDetection = $tempfile.HardmodeDetection
-        Hardmode2DetectionType = $tempfile.Hardmode2DetectionType
-        Hardmode2Detection = $tempfile.Hardmode2Detection
-    }
+# Ensure the directory exists
+if (-not (Test-Path $tempFileDir)) {
+    New-Item -Path $tempFileDir -ItemType Directory -Force | Out-Null
 }
-Log-Message "Temp file list created with $($tempfileList.Count) items." "DEBUG"
-# Add to the master list
-$allProgramsAndPolicies += $tempfileList
+
+# Create the file
+Set-Content -Path $tempFilePath -Value "This file should be removed." -Force | Out-Null
+
+# Add this file to the master list for scoring
+$allProgramsAndPolicies += [PSCustomObject]@{
+    OriginalPath = ''
+    Filename     = 'CacheNotClear.txt'
+    Type         = 'Tempfiles'
+    FriendlyName = 'Edge Cache File'
+    DetectionMethod = 'FileExistence'
+    Detection = $tempFilePath # The full path to the file to be detected/removed
+    Hardmode = ''
+    HardmodeDetectionType = ''
+    HardmodeDetection = ''
+    Hardmode2DetectionType = ''
+    Hardmode2Detection = ''
+}
 #endregion
 
 #region MARK: Generate Security Policy Settings
@@ -642,19 +646,67 @@ $allProgramsAndPolicies += $secpolObjects
 Log-Message "Generated $($secpolObjects.Count) security policy objects." "DEBUG"
 #endregion
 
+#region MARK: Generate Malicious Scheduled Tasks
+Log-Message "Generating malicious scheduled tasks..." "INFO"
+
+# Define a pool of plausible but suspicious task details
+$taskPool = @(
+    @{ Name = "GoogleUpdateTaskMachineCore"; Description = "Keeps your Google software up to date."; Action = "calc.exe" },
+    @{ Name = "Adobe Flash Player Updater"; Description = "Checks for updates to Adobe Flash Player."; Action = "notepad.exe" },
+    @{ Name = "Java Update Scheduler"; Description = "Checks for new versions of Java."; Action = "powershell.exe"; Arguments = "-Command Start-Sleep -Seconds 30" },
+    @{ Name = "SystemHealthCheck"; Description = "Monitors system health and performance."; Action = "cmd.exe"; Arguments = "/c echo System Health OK" },
+    @{ Name = "OneDrive Standalone Updater"; Description = "Updates the OneDrive sync client."; Action = "explorer.exe" },
+    @{ Name = "Microsoft Compatibility Telemetry"; Description = "Sends anonymous telemetry data to Microsoft."; Action = "control.exe" }
+)
+
+$scheduledTaskObjects = @()
+try {
+    # Ensure $randomscheduledtasks is an integer
+    if ($randomscheduledtasks -is [string]) {
+        $randomscheduledtasks = [int]$randomscheduledtasks
+    }
+
+    $selectedTasks = $taskPool | Get-Random -Count $randomscheduledtasks
+
+    foreach ($task in $selectedTasks) {
+        $taskAction = New-ScheduledTaskAction -Execute $task.Action -Argument $task.Arguments
+        $taskTrigger = New-ScheduledTaskTrigger -AtLogOn
+        $taskPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
+        Register-ScheduledTask -TaskName $task.Name -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Description $task.Description -Force | Out-Null
+        
+        $scheduledTaskObjects += [PSCustomObject]@{
+            OriginalPath = ''
+            Filename     = $task.Name
+            Type         = 'ScheduledTask'
+            Hardmode     = ''
+            FriendlyName = $task.Name
+            Silent       = ''
+            Wait         = ''
+            DetectionMethod = 'ScheduledTask'
+            Detection       = $task.Name
+        }
+        Log-Message "Created scheduled task: $($task.Name)" "INFO"
+    }
+    $allProgramsAndPolicies += $scheduledTaskObjects
+} catch {
+    Log-Message "Failed to create scheduled tasks. Error: $($_.Exception.Message)" "ERROR"
+}
+#endregion
+
 # Export the combined list of programs and policies to installed.csv for the first time
 $installedCsv = Join-Path $tempDir 'installed.csv'
 $allProgramsAndPolicies | Export-Csv -Path $installedCsv -NoTypeInformation
 Log-Message "Initial export of all programs and policies to '$installedCsv'." "INFO"
 
-#region MARK: Enrich installed.csv with program config data
+#region MARK: Enrich installed.csv with program config data (excluding Tempfiles)
 Log-Message "Enriching installed.csv with data from $programsconfig" "INFO"
 # Import installed.csv and programs.xlsx
 $installed = Import-Csv -Path $installedCsv
 $programs = Import-Excel -Path $programsconfig -WorksheetName 'Software'
 
-# Filter out policy objects before enriching, as they don't have corresponding entries in programs.xlsx
-$programsToEnrich = $installed | Where-Object { $_.Type -ne 'PasswordPolicy' }
+# Separate program entries from non-program entries (like policies and tasks) before enriching.
+$nonProgramTypes = @('PasswordPolicy', 'ScheduledTask', 'Tempfiles')
+$programsToEnrich = $installed | Where-Object { $_.Type -notin $nonProgramTypes }
 
 # Enrich program list with Silent and Verification from programs.xlsx
 foreach ($item in $programsToEnrich) {
@@ -673,29 +725,42 @@ foreach ($item in $programsToEnrich) {
     }
 }
 
-# Recombine enriched programs with policy objects
-$policyObjects = $installed | Where-Object { $_.Type -eq 'PasswordPolicy' }
-$installed = $programsToEnrich + $policyObjects
+# Recombine the enriched programs with the non-program entries that were set aside.
+$nonProgramObjects = $installed | Where-Object { $_.Type -in $nonProgramTypes }
+$installed = $programsToEnrich + $nonProgramObjects
 
 # Export the final, enriched list (programs + policies) back to installed.csv
 $installed | Export-Csv -Path $installedCsv -NoTypeInformation
 Log-Message "Final enriched installed.csv (programs and policies) exported." "INFO"
 #endregion
 
+
+
+
 #region MARK: Sync system time
 # Sync system time with internet time server.  This is used to detect the password change date for users.
 Log-Message "Syncing system time with internet time server..." "INFO"
 try {
-    Start-Process w32tm -ArgumentList "/resync" -NoNewWindow -Wait -RedirectStandardOutput $null
-    Log-Message "System time synced successfully." "INFO"
+    # Ensure the Windows Time service is running and configured for a more robust sync.
+    if ((Get-Service -Name w32time).Status -ne 'Running') {
+        Set-Service -Name w32time -StartupType Automatic -ErrorAction Stop
+        Start-Service -Name w32time -ErrorAction Stop
+        Log-Message "Windows Time service (w32time) was not running and has been started." "INFO"
+    }
+    
+    # Configure to use a reliable source and resync. This is more robust than just /resync.
+    w32tm.exe /config /manualpeerlist:"time.windows.com,0x1" /syncfromflags:manual /update | Out-Null
+    w32tm.exe /resync /force | Out-Null
+
+    Log-Message "System time synced successfully with time.windows.com." "INFO"
 } catch {
-    Log-Message "Failed to sync system time. Please run this script with administrative privileges." "ERROR"
+    Log-Message "Failed to sync system time. This may require administrative privileges or an internet connection. Error: $($_.Exception.Message)" "ERROR"
 }
 #endregion
 
 #region Mark: Copy temp files to user profile
 Log-Message "Copying temp files to user profile temp directories for verification..." "INFO"
-Copy-Item -Path "$PSScriptRoot\Saltedfiles\*" -Destination "$env:APPDATA\Local\Microsoft\Edge\User Data\" -Recurse -Force
+Copy-Item -Path "$PSScriptRoot\Saltedfiles\*" -Destination "$env:LOCALAPPDATA\Microsoft\Edge\User Data\" -Recurse -Force
 
 #endregion
 
@@ -810,6 +875,24 @@ if ($skipProgramInstalls) {
 }
 #endregion
 
+#region MARK: Scan for Windows Updates
+Log-Message "Scanning for Windows Updates (this does not install them)..." "INFO"
+try {
+    # Use the PSWindowsUpdate module if available, as it's a reliable method.
+    if (Get-Module -ListAvailable -Name PSWindowsUpdate) {
+        Log-Message "Using PSWindowsUpdate module to scan for updates." "DEBUG"
+        Get-WindowsUpdate -ScanOnly -ErrorAction Stop | Out-Null
+    } else {
+        # Fallback to UsoClient if the module is not present.
+        Log-Message "PSWindowsUpdate module not found. Using UsoClient.exe to initiate a scan." "DEBUG"
+        Start-Process -FilePath "UsoClient.exe" -ArgumentList "StartScan" -Wait -NoNewWindow
+        Log-Message "UsoClient.exe scan initiated." "INFO"
+    }
+    Log-Message "Windows Update scan completed. This action updates the 'last checked' time." "INFO"
+} catch {
+    Log-Message "Failed to check for Windows Updates. Error: $($_.Exception.Message)" "ERROR"
+}
+#endregion
 
 # Apply security policies that change password requirements, lockout policies, etc.
 
@@ -862,10 +945,10 @@ The company demands that a password policy be enforced.  The current password po
 - Minimum Password Length: $minPasswordLength characters
 - Maximum Password Age: $maxPasswordAge days
 - Minimum Password Age: $minPasswordAge days
-- Password must meet complexity requirements: Enabled
 - Lockout Duration: $lockoutDuration Minutes
 - Lockout Threshold: $lockoutThreshold attempts
-- Reset account lockout counter after: $lockoutWindow Minutes
+- Lockout Window: $lockoutWindow Minutes
+
 "@
 
 Set-Content -Path $readmePath -Value $readmecontent
@@ -879,14 +962,11 @@ $splashForm.Close()
     Log-Message "--- Finished Cybersec Practice Setup ---" "INFO"
     # Show completion message first, so it appears on top of the splash screen.
 [System.Windows.Forms.MessageBox]::Show(
-    "Setup is complete.",
-    "Environment is ready",
-    [System.Windows.Forms.MessageBoxButtons]::OK,
-    [System.Windows.Forms.MessageBoxIcon]::Information
-)
-exit
+    "Setup is complete.", "Environment is ready", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+#exit 
 }
+
 
 # When the script is run directly, the $PSScriptRoot automatic variable is available.
 # We call the main function, passing the PSScriptRoot and any command-line parameters.
-Invoke-CybersecSetup -PSScriptRoot $PSScriptRoot -SetupLogFile $PSBoundParameters['SetupLogFile']
+Invoke-CybersecSetup -PSScriptRoot $PSScriptRoot -SetupLogFile $SetupLogFile

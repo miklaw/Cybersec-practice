@@ -157,9 +157,8 @@ foreach ($program in $installedPrograms) {
                 # - For malware/unauthorized, the path should NOT exist. Result = 1 if it does NOT.
                 if ($program.Type -eq 'safe') {
                     if ($pathExists) { $result = 1 }
-                }
-                else { # For malware, manualmalware, Unauthorized
-                    if (-not $pathExists) { $result = 1 }
+                } else { # For malware, manualmalware, Unauthorized, and Tempfiles
+                    if (-not $pathExists) { $result = 1 } 
                 }
                 Log-Message "[STANDARD CHECK] Result score: $result" "DEBUG"
             }
@@ -192,6 +191,20 @@ foreach ($program in $installedPrograms) {
             }
             Log-Message "[POLICY CHECK] Policy: '$policyName'. Expected: '$expectedValue', Actual: '$actualValue'. Result: $result" "DEBUG"
 
+        }
+        # --- MARK: Scheduled Task Detection Logic ---
+        elseif ($program.Type -eq 'ScheduledTask') {
+            $taskName = $program.Detection
+            $taskExists = $false
+            try {
+                if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
+                    $taskExists = $true
+                }
+            } catch {}
+
+            # Score is 1 if the task does NOT exist (i.e., it was removed).
+            if (-not $taskExists) { $result = 1 }
+            Log-Message "[SCHEDULED TASK CHECK] Task: '$taskName'. Exists: $taskExists. Result: $result" "DEBUG"
         }
         
 
@@ -487,6 +500,7 @@ foreach ($group in $GeneratedGroups) {
 #endregion
 
 
+
 ##############################################################################################
 #region MARK: Firewall and Network Scoring
 ##############################################################################################
@@ -619,9 +633,9 @@ elseif ($lowerTitle.Contains("passwordpolicy")) {
     $dataGridView.Columns.Add("HardmodeResult", " ")
     $dataGridView.Columns.Add("Hardmode2Result", " ")
 }
-elseif ($lowerTitle.Contains("firewall")) {
-    $dataGridView.Columns.Add("FriendlyName", "Firewall Setting")
-    $dataGridView.Columns.Add("Result", "Status")
+elseif ($lowerTitle.Contains("scheduledtask")) {
+    $dataGridView.Columns.Add("FriendlyName", "Task Name")
+    $dataGridView.Columns.Add("Result", "Removed")
     $dataGridView.Columns.Add("HardmodeResult", " ")
     $dataGridView.Columns.Add("Hardmode2Result", " ")
 }

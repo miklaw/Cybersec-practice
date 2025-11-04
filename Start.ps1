@@ -17,6 +17,7 @@ catch {
 
 Add-Type -AssemblyName System.Windows.Forms
 # TODO: Add option to preconfigured csv files for setup script. This will allow for quick setup of different predefined scenarios.
+# TODO: Company categories for required software installs and readme scenario 
 
 #region MARK: Virtual Machine Check
 function Test-IsVirtualMachine {
@@ -97,21 +98,6 @@ function Log-Message {
     Add-Content -Path $script:logfile -Value "$timestamp [$type] $message"
 }
 
-# Helper function to add colored text to the RichTextBox
-function Add-HistoryItem {
-    param(
-        [string]$Text,
-        [System.Drawing.Color]$Color
-    )
-    $historyBox.SelectionStart = $historyBox.TextLength
-    $historyBox.SelectionLength = 0
-    $historyBox.SelectionColor = $Color
-    $historyBox.AppendText("$Text`n")
-    $historyBox.ScrollToCaret()
-}
-
-# A list to keep track of active runspaces to prevent them from being garbage collected
-$script:ActiveRunspaces = [System.Collections.Generic.List[hashtable]]::new()
 
 #region MARK: Configuration variables
 $updateenabled = "Internet"
@@ -127,7 +113,6 @@ $updateconfig = "config.zip"
 $updatesaltedfiles = "saltedfiles.zip"
 $webauth = "No"
 $clearlog = "yes" # Set to "yes" to clear the log file on startup
-$noexitonscriptcomplete = "no" # Set to "yes" to prevent exiting on script completion
 # Default script parameters. These can be overridden by the config file.
 $scriptparamfile = "$scriptpath\config\scriptparams.cfg"
 $scriptparams = @{
@@ -141,36 +126,37 @@ $scriptparams = @{
     randomunauthorizednumbers  = "1"
     numberofbuiltingroups      = "1"
     passwordchangedate         = "2025-01-01"
+    randomscheduledtasks       = "2"
 }
+$debugscripts = $false #if This is set to true, the script windows will remain open to give us time to view their output
 #endregion  
 
-#check for existing config file
-if (Test-Path $scriptparamfile) {
-    $loadedParams = $null
-    try {
-        # Attempt to load and parse the file.
-        $fileContent = Get-Content -Path $scriptparamfile -Raw -ErrorAction Stop
-        $loadedParams = $fileContent | ConvertFrom-StringData -ErrorAction Stop
-    } catch {
-        # This will catch errors if the file is malformed.
-        Log-Message "A parsing error occurred while reading '$scriptparamfile'. Error: $($_.Exception.Message)" "ERROR"
-    }
+# --- MARK: Load and Validate Configuration ---
+# Define the default parameters first.
+$defaultParams = $scriptparams.Clone()
 
-    # Validate the loaded parameters. If they are null or empty, fall back to defaults.
-    if ($null -ne $loadedParams -and $loadedParams.Count -gt 0) {
+if (Test-Path $scriptparamfile) {
+    try {
+        $loadedParams = Get-Content -Path $scriptparamfile -Raw | ConvertFrom-StringData
+        # Merge defaults with loaded params. This adds any new keys from defaults.
+        foreach ($key in $defaultParams.Keys) {
+            if (-not $loadedParams.ContainsKey($key)) {
+                $loadedParams[$key] = $defaultParams[$key]
+                Log-Message "Added missing config key '$key' with default value." "INFO"
+            }
+        }
         $scriptparams = $loadedParams
-        Log-Message "Successfully loaded script parameters from '$scriptparamfile'." "INFO"
-    } else {
-        Log-Message "Config file '$scriptparamfile' was empty or invalid. Using default values." "WARN"
+        Log-Message "Successfully loaded and validated script parameters from '$scriptparamfile'." "INFO"
+    } catch {
+        Log-Message "Config file '$scriptparamfile' was invalid. Using default values. Error: $($_.Exception.Message)" "WARN"
+        $scriptparams = $defaultParams
     }
 } else {
-    #create config file with default values
-    $output = foreach ($key in $scriptparams.Keys) {
-        "$key=$($scriptparams[$key])" # No longer wrapping default values in quotes
-    }
-    Set-Content -Path $scriptparamfile -Value $output
-    Log-Message "Created default script parameters config file." "INFO"
+    Log-Message "No config file found. Using default script parameters." "INFO"
+    $scriptparams = $defaultParams
 }
+# Save the (potentially updated) configuration back to the file.
+$scriptparams.GetEnumerator() | ForEach-Object { "$($_.Name)=$($_.Value)" } | Set-Content -Path $scriptparamfile
 
 $script:configTextBoxes = @{} # Initialize the hashtable to store references to textboxes
 
@@ -216,9 +202,7 @@ $btnUpdateSelected.Dock = "Bottom"
 $btnUpdateSelected.Height = 40
 $btnUpdateSelected.Margin = New-Object System.Windows.Forms.Padding(10)
 $btnUpdateSelected.Add_Click({
-    $tabs.SelectedTab = $tabStatus
     Log-Message "Update process started by user." "INFO"
-    $progressBar.Visible = $true
     $form.Refresh()
 
     $filesToUpdate = @()
@@ -235,9 +219,7 @@ $btnUpdateSelected.Add_Click({
     }
 
     if ($filesToUpdate.Count -eq 0) {
-        $statusLabel.Text = "No updates selected."
         Log-Message "Update process cancelled: No updates were selected." "WARN"
-        $progressBar.Visible = $false
         return
     }
 
@@ -245,9 +227,7 @@ $btnUpdateSelected.Add_Click({
     $statusLabel.Text = "Phase 1: Downloading all selected files..."
     Log-Message "--- Starting Download Phase ---" "INFO"
     foreach ($file in $filesToUpdate) {
-        $statusLabel.Text = "Downloading $($file.Label)..."
         Log-Message "Attempting to download $($file.Label)..." "INFO"
-        $form.Refresh()
         try {
             $localUpdateFile = Join-Path $updatecachelocation $file.Filename
             $updateurl = if ($updateenabled -eq "Internet") { "$updateloc/$($file.Filename)" }
@@ -260,19 +240,15 @@ $btnUpdateSelected.Add_Click({
 
             $file.LocalPath = $localUpdateFile
             Log-Message "Successfully downloaded $($file.Filename) to $localUpdateFile" "INFO"
-            Add-HistoryItem -Text "COMPLETED Downloaded: $($file.Label)" -Color "Green"
         } catch {
             Log-Message "Download failed for $($file.Label): $($_.Exception.Message)" "ERROR"
-            Add-HistoryItem -Text "❌ Download failed: $($file.Label)" -Color "Red"
         }
     }
 
     # --- Phase 2: Extract all files ---
-    $statusLabel.Text = "Phase 2: Extracting all downloaded files..."
     Log-Message "--- Starting Extraction Phase ---" "INFO"
     foreach ($file in $filesToUpdate) {
         if (-not $file.LocalPath) { continue } # Skip if download failed
-        $statusLabel.Text = "Extracting $($file.Label)..."
         Log-Message "Attempting to extract $($file.Label)..." "INFO"
         $form.Refresh()
         try {
@@ -285,56 +261,25 @@ $btnUpdateSelected.Add_Click({
                 $sevenZipPath = Join-Path $updatecachelocation "7z.exe"
                 if (-not (Test-Path $sevenZipPath)) {
                     Log-Message "7-Zip not found in temp cache. Downloading..." "INFO"
-                    $statusLabel.Text = "Downloading 7-Zip..."
                     $form.Refresh()
                     $sevenZipUrl = "https://www.7-zip.org/a/7z.exe"
                     (New-Object System.Net.WebClient).DownloadFile($sevenZipUrl, $sevenZipPath)
                     Log-Message "7-Zip downloaded successfully." "INFO"
                 }
             }
-
-            $statusLabel.Text = "Extracting $($file.Label)..."
             $form.Refresh()
             $arguments = "x `"$($file.LocalPath)`" -o`"$scriptpath`" -y"
             Start-Process -FilePath $sevenZipPath -ArgumentList $arguments -Wait -NoNewWindow
 
             Log-Message "Successfully extracted $($file.Filename) to $scriptpath" "INFO"
-            Add-HistoryItem -Text "COMPLETED Extraction: $($file.Label)" -Color "Green"
         } catch {
             Log-Message "Extraction failed for $($file.Label): $($_.Exception.Message)" "ERROR"
-            Add-HistoryItem -Text "FAILED Extraction: $($file.Label)" -Color "Red"
         }
     }
-    $statusLabel.Text = "All update operations complete."
     Log-Message "Update process finished." "INFO"
-    $progressBar.Visible = $false
 })
 $tabUpdates.Controls.Add($btnUpdateSelected)
 $tabUpdates.Padding = New-Object System.Windows.Forms.Padding(10)
-
-
-### MARK: TAB 2: Status ###
-$tabStatus = New-Object System.Windows.Forms.TabPage
-$tabStatus.Text = "Status"
-
-$progressBar = New-Object System.Windows.Forms.ProgressBar
-$progressBar.Location = New-Object System.Drawing.Point(30,20)
-$progressBar.Size = New-Object System.Drawing.Size(500,20)
-$progressBar.Style = 'Marquee'
-$progressBar.Visible = $false
-$tabStatus.Controls.Add($progressBar)
-
-$statusLabel = New-Object System.Windows.Forms.Label
-$statusLabel.Location = New-Object System.Drawing.Point(30,50)
-$statusLabel.Size = New-Object System.Drawing.Size(500,20)
-$statusLabel.Text = ""
-$tabStatus.Controls.Add($statusLabel)
-
-$historyBox = New-Object System.Windows.Forms.RichTextBox
-$historyBox.Location = New-Object System.Drawing.Point(30,80)
-$historyBox.Size = New-Object System.Drawing.Size(500,250)
-$historyBox.ReadOnly = $true
-$tabStatus.Controls.Add($historyBox)
 
 ### MARK: TAB 3: Logs ###
 $tabLogs = New-Object System.Windows.Forms.TabPage
@@ -416,7 +361,7 @@ $tabScripts.Text = "Scripts"
 
 # Find all .ps1 files in the script's root directory, excluding this script itself.
 $availableScripts = Get-ChildItem -Path $scriptpath -Filter *.ps1 | Where-Object {
-    ($_.Name -ne $MyInvocation.MyCommand.Name) -and ($_.Name -ne 'Start.ps1') -and ($_.Name -notlike '*requirements*')
+    ($_.Name -ne $MyInvocation.MyCommand.Name) -and ($_.Name -ne 'Start.ps1') -and ($_.Name -ne 'Cybersec requirements setup.ps1')
 }
 
 $yPos = 20
@@ -449,18 +394,18 @@ foreach ($scriptFile in $availableScripts) {
             # For GUI-based scripts like setup and scorecard, run them in a new, separate process
             # to ensure stability and prevent the main dashboard from freezing.
             if ($functionName -in "Invoke-OpenScoreCard", "Invoke-CybersecSetup") {
-                if ($noexitonscriptcomplete -eq "yes") {
-                    $argumentList = "-NoExit -NoProfile -ExecutionPolicy Bypass -File `"$scriptToRun`""
-                } else {
-                    $argumentList = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptToRun`""
+                $argumentList = "-NoProfile -ExecutionPolicy Bypass"
+                if ($debugscripts) {
+                    $argumentList += " -NoExit"
                 }
+                $argumentList += " -File `"$scriptToRun`""
 
                 # The setup script is designed to accept a log file path, but the scorecard script is not.
                 if ($scriptName -like "*setup.ps1") {
                     $argumentList += " -SetupLogFile `"$logfile`""
                 }
                 Log-Message "Starting '$scriptName' in a new process with arguments: $argumentList" "INFO"
-                Start-Process powershell.exe -ArgumentList $argumentList -Wait
+                Start-Process powershell.exe -ArgumentList $argumentList
                 return
             }
 
@@ -478,7 +423,6 @@ foreach ($scriptFile in $availableScripts) {
 $tabs.Controls.Add($tabScripts)
 $tabs.Controls.Add($tabConfig)
 $tabs.Controls.Add($tabUpdates)
-$tabs.Controls.Add($tabStatus)
 $tabs.Controls.Add($tabLogs)
 $form.Controls.Add($tabs)
 
