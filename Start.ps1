@@ -1,13 +1,3 @@
-# Set the execution policy for the current process to avoid security errors.
-# This is generally safe for scripts you trust.
-try {
-    Set-ExecutionPolicy -ExecutionPolicy 'ByPass' -Scope 'Process' -Force -ErrorAction 'Stop'
-}
-catch {
-    Write-Warning "Could not set execution policy. This might cause issues on some systems."
-    Write-Warning "Error: $($_.Exception.Message)"
-}
-
 # Cybersecurity Training Start Script
 # Created by Mike Law
 # Creation Date: 2025-08-23
@@ -33,7 +23,8 @@ function Test-IsVirtualMachine {
     }
     return $false
 }
-
+#endregion
+#region MARK: Physical Machine Warning
 if (-not (Test-IsVirtualMachine)) {
     # Create a custom form to allow for custom button text
     $warningForm = New-Object System.Windows.Forms.Form
@@ -77,7 +68,7 @@ $scriptpath = Split-Path -Parent $MyInvocation.MyCommand.Definition
 Set-Location $scriptpath
 $logpath = "$scriptpath\logs"
 if (!(Test-Path $logpath)) { New-Item -ItemType Directory -Path $logpath | Out-Null }
-$logfile = "$logpath\cybersec_score_log_$(Get-Date -Format 'yyyyMMdd').txt"
+$logfile = "$logpath\cybersec_start_log_$(Get-Date -Format 'yyyyMMdd').txt"
 if (!(Test-Path $logfile)) { New-Item -ItemType File -Path $logfile | Out-Null }
 
 # Clear the log file on startup if the option is enabled
@@ -101,7 +92,7 @@ function Log-Message {
 
 #region MARK: Configuration variables
 $updateenabled = "Internet"
-$updatecachelocation = "$env:TEMP\cybersec"
+$updatecachelocation = "$scriptpath\cache"
 $updateLANtest = "\\192.168.2.130\cybersec" # Example LAN path for updates
 # The base URL for your GitHub repository's releases.
 # Replace 'YOUR_GITHUB_USERNAME', 'YOUR_REPO_NAME', and 'YOUR_TAG' accordingly.
@@ -116,15 +107,15 @@ $clearlog = "yes" # Set to "yes" to clear the log file on startup
 # Default script parameters. These can be overridden by the config file.
 $scriptparamfile = "$scriptpath\config\scriptparams.cfg"
 $scriptparams = @{
-    randomusernumber           = "6"
+    randomusernumber           = "6"  
     randomgroupnumber          = "3"
-    randomfakeusernumber       = "1"
-    randomfakegroupnumber      = "1"
-    randomprogramnumbers       = "2"
+    randomfakeusernumber       = "2"
+    randomfakegroupnumber      = "2"
+    randomprogramnumbers       = "3"
     randommalwarenumbers       = "2"
     randommanualmalwarenumbers = "2"
     randomunauthorizednumbers  = "1"
-    numberofbuiltingroups      = "1"
+    numberofbuiltingroups      = "2"
     passwordchangedate         = "2025-01-01"
     randomscheduledtasks       = "2"
 }
@@ -256,31 +247,17 @@ $btnUpdateSelected.Add_Click({
         Log-Message "Attempting to extract $($file.Label)..." "INFO"
         $form.Refresh()
         try {
-            # Use 7-Zip for extraction to robustly handle long file paths.
-            # First, check for a standard installation.
-            $sevenZipPath = "C:\Program Files\7-Zip\7z.exe"
-            if (-not (Test-Path $sevenZipPath)) {
-                Log-Message "Standard 7-Zip installation not found. Checking temp cache..." "INFO"
-                # If not found, fall back to the temp directory version.
-                $sevenZipPath = Join-Path $updatecachelocation "7z.exe"
-                if (-not (Test-Path $sevenZipPath)) {
-                    Log-Message "7-Zip not found in temp cache. Downloading..." "INFO"
-                    $form.Refresh()
-                    $sevenZipUrl = "https://www.7-zip.org/a/7z.exe"
-                    (New-Object System.Net.WebClient).DownloadFile($sevenZipUrl, $sevenZipPath)
-                    Log-Message "7-Zip downloaded successfully." "INFO"
-                }
-            }
-            $form.Refresh()
-            $arguments = "x `"$($file.LocalPath)`" -o`"$scriptpath`" -y"
-            Start-Process -FilePath $sevenZipPath -ArgumentList $arguments -Wait -NoNewWindow
-
+            $arguments = "-xf `"$($file.LocalPath)`" -C `"$scriptpath`""
+            Start-Process -FilePath "tar" -ArgumentList $arguments -Wait -NoNewWindow # tar has been built into Windows 11 25H2 so we will be using it to extract files
+            $file.ExtractPath = $scriptpath
             Log-Message "Successfully extracted $($file.Filename) to $scriptpath" "INFO"
         } catch {
             Log-Message "Extraction failed for $($file.Label): $($_.Exception.Message)" "ERROR"
         }
     }
     Log-Message "Update process finished." "INFO"
+    [System.Windows.Forms.MessageBox]::Show("Update process has finished.", "Update Complete", "OK", "Information")
+    
 })
 $tabUpdates.Controls.Add($btnUpdateSelected)
 $tabUpdates.Padding = New-Object System.Windows.Forms.Padding(10)
@@ -386,8 +363,10 @@ foreach ($scriptFile in $availableScripts) {
         $functionName = switch -Wildcard ($scriptName) {
             "*setup.ps1"       { "Invoke-CybersecSetup" }
             "*score card.ps1"  { "Invoke-OpenScoreCard" }
+            "*Prerequisites.ps1"  { "Invoke-Prerequisites" }
             default            { "" }
         }
+
 
         try {
             if ([string]::IsNullOrEmpty($functionName)) {
@@ -397,7 +376,7 @@ foreach ($scriptFile in $availableScripts) {
 
             # For GUI-based scripts like setup and scorecard, run them in a new, separate process
             # to ensure stability and prevent the main dashboard from freezing.
-            if ($functionName -in "Invoke-OpenScoreCard", "Invoke-CybersecSetup") {
+            if ($functionName -in "Invoke-OpenScoreCard", "Invoke-CybersecSetup", "Invoke-Prerequisites") {
                 $argumentList = "-NoProfile -ExecutionPolicy Bypass"
                 if ($debugscripts) {
                     $argumentList += " -NoExit"

@@ -6,6 +6,11 @@ function Invoke-OpenScoreCard {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# Mark: Import modules    
+Log-Message "Importing required modules..." "DEBUG"
+# Import the ImportExcel module so that we can read Excel files
+Import-Module ImportExcel
+
 #region MARK: "In Progress" Splash Screen
 # Create a simple form to show that scoring is in progress.
 # This is crucial to keep the GUI thread alive in the runspace.

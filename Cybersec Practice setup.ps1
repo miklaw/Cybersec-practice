@@ -4,22 +4,38 @@ param (
 )
 # --- DEBUGGING ---
 # Set to $true to skip the entire program installation section for faster testing.
-$skipProgramInstalls = $false
+$skipProgramInstalls = $true
+$hidesplash = $true
+$clearlog = "yes" # Set to "yes" to clear the log file on startup, "no" to append
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
 Write-Host "DEBUG: Defining Log-Message function..."
 
-# Define a logging function that is available throughout the script.
-# This ensures that when run standalone, it can log to the file passed by Start.ps1.
-function Log-Message {
-    param([string]$message, [string]$type = "INFO")
-    # This function is self-contained for when the script is run directly.
-    # It ensures the log directory and file exist before writing.
-    $logDir = Join-Path $PSScriptRoot 'logs'
-    if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
-    # Use the passed LogFile parameter if available, otherwise default.
-    $resolvedLogFile = if (-not [string]::IsNullOrEmpty($SetupLogFile)) { $SetupLogFile } else { Join-Path $logDir 'setup.log' }
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$type] $message" | Add-Content -Path $resolvedLogFile
+# Set working paths and logging
+$scriptpath = Split-Path -Parent $MyInvocation.MyCommand.Definition
+Set-Location $scriptpath
+$logpath = "$scriptpath\logs"
+if (!(Test-Path $logpath)) { New-Item -ItemType Directory -Path $logpath | Out-Null }
+$logfile = "$logpath\cybersec_setup_log_$(Get-Date -Format 'yyyyMMdd').txt"
+if (!(Test-Path $logfile)) { New-Item -ItemType File -Path $logfile | Out-Null }
+
+# Clear the log file on startup if the option is enabled
+if ($clearlog -eq "yes" -and (Test-Path $logfile)) {
+    Clear-Content -Path $logfile
+    Write-Host "Log file for today has been cleared as per configuration."
 }
+
+# Logging function
+function Log-Message {
+    param ([string]$message, [string]$type = "INFO")
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    # --- DEBUGGING: Check if the logfile path is valid ---
+    if ([string]::IsNullOrEmpty($script:logfile)) {
+        Write-Error "Log-Message FATAL: `$script:logfile variable is null or empty. Cannot write log. Message was: [$type] $message"
+        return # Stop execution of this function to prevent the Add-Content error
+    }
+    Add-Content -Path $script:logfile -Value "$timestamp [$type] $message"
+}
+
 
 Write-Host "DEBUG: Finished defining Log-Message function..."
 Write-Host "DEBUG: Defining Invoke-CybersecSetup function..."
@@ -37,39 +53,41 @@ Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 #region MARK: Splash Screen
-# Create and configure the splash screen form
-$splashForm = New-Object System.Windows.Forms.Form
-$splashForm.FormBorderStyle = 'None'
-$splashForm.WindowState = 'Maximized'
-$splashForm.TopMost = $true
-$splashForm.BackColor = 'Black'
-$splashForm.Text = 'Setup in Progress'
+if (-not $hidesplash) {
+    # Create and configure the splash screen form
+    $splashForm = New-Object System.Windows.Forms.Form
+    $splashForm.FormBorderStyle = 'None'
+    $splashForm.WindowState = 'Maximized'
+    $splashForm.TopMost = $true
+    $splashForm.BackColor = 'Black'
+    $splashForm.Text = 'Setup in Progress'
 
-# Create and configure the label
-$splashLabel = New-Object System.Windows.Forms.Label
-$splashLabel.Text = 'Preparing the environment... Please wait.'
-$splashLabel.Font = New-Object System.Drawing.Font('Arial', 24, [System.Drawing.FontStyle]::Bold)
-$splashLabel.ForeColor = 'White'
-$splashLabel.AutoSize = $true
+    # Create and configure the label
+    $splashLabel = New-Object System.Windows.Forms.Label
+    $splashLabel.Text = 'Preparing the environment... Please wait.'
+    $splashLabel.Font = New-Object System.Drawing.Font('Arial', 24, [System.Drawing.FontStyle]::Bold)
+    $splashLabel.ForeColor = 'White'
+    $splashLabel.AutoSize = $true
 
-# Center the label on the form
-$splashForm.Add_Shown({
-    $graphics = $splashForm.CreateGraphics()
-    $labelSize = $graphics.MeasureString($splashLabel.Text, $splashLabel.Font)
+    # Center the label on the form
+    $splashForm.Add_Shown({
+        $graphics = $splashForm.CreateGraphics()
+        $labelSize = $graphics.MeasureString($splashLabel.Text, $splashLabel.Font)
 
-    $splashLabel.Location = New-Object System.Drawing.Point(
-        [int](($splashForm.ClientSize.Width - $labelSize.Width) / 2),
-        [int](($splashForm.ClientSize.Height - $labelSize.Height) / 2)
-    )
-})
+        $splashLabel.Location = New-Object System.Drawing.Point(
+            [int](($splashForm.ClientSize.Width - $labelSize.Width) / 2),
+            [int](($splashForm.ClientSize.Height - $labelSize.Height) / 2)
+        )
+    })
 
-$splashForm.Controls.Add($splashLabel)
-Write-Host "DEBUG: Showing splash screen."
-# Show the splash screen without blocking the script
-$splashForm.Show()
-$splashForm.Activate()
-$splashForm.Refresh()
-[System.Windows.Forms.Application]::DoEvents()
+    $splashForm.Controls.Add($splashLabel)
+    Write-Host "DEBUG: Showing splash screen."
+    # Show the splash screen without blocking the script
+    $splashForm.Show()
+    $splashForm.Activate()
+    $splashForm.Refresh()
+    [System.Windows.Forms.Application]::DoEvents()
+}
 #endregion
 
 ##############################################################################################
@@ -127,11 +145,36 @@ $unauthorizedProgramsDir = Join-Path $PSScriptRoot 'programs\unauthorized'
 
 #endregion
 
+
+#region MARK: Powershell modules
+# Check for NuGet package provider
+if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+     [System.Windows.Forms.MessageBox]::Show("NuGet is not installed. You need to run the Cybersec Prerequisits.ps1 script first", "Prerequisites Required", "OK", "Warning")
+     Write-Host "NuGet not found. Exiting..."
+    exit
+}
+#Install required powershell modules
+# Check if ImportExcel module is installed
+if (-not (Get-Module -ListAvailable -Name ImportExcel)) {
+    Write-Host "ImportExcel module not found. Attempting to install..."
+    try {
+        Install-Module -Name ImportExcel -Force -AllowClobber -ErrorAction Stop
+        Write-Host "ImportExcel module installed successfully."
+    } catch {
+        Write-Host "ERROR: Failed to install ImportExcel module. Error: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Error: Failed to install ImportExcel module. Please install it manually using: Install-Module -Name ImportExcel -Force", "Module Installation Error", "OK", "Error")
+        exit
+    }
+} else {
+    Write-Host "ImportExcel module found."
+}
+
+
 # Mark: Import modules    
 Log-Message "Importing required modules..." "DEBUG"
 # Import the ImportExcel module so that we can read Excel files
 Import-Module ImportExcel
-    
+#endregion    
 
 #region MARK: Create temp directory and define file paths
 # This script selects random user entries from an Excel file and saves them to a temporary CSV file for account creation
@@ -655,12 +698,12 @@ Log-Message "Generating malicious scheduled tasks..." "INFO"
 
 # Define a pool of plausible but suspicious task details
 $taskPool = @(
-    @{ Name = "GoogleUpdateTaskMachineCore"; Description = "Keeps your Google software up to date."; Action = "calc.exe" },
-    @{ Name = "Adobe Flash Player Updater"; Description = "Checks for updates to Adobe Flash Player."; Action = "notepad.exe" },
+    @{ Name = "GoogleUpdateTaskMachineCore"; Description = "Keeps your Google software up to date."; Action = "calc.exe"; Arguments = "" },
+    @{ Name = "Adobe Flash Player Updater"; Description = "Checks for updates to Adobe Flash Player."; Action = "notepad.exe"; Arguments = "" },
     @{ Name = "Java Update Scheduler"; Description = "Checks for new versions of Java."; Action = "powershell.exe"; Arguments = "-Command Start-Sleep -Seconds 30" },
     @{ Name = "SystemHealthCheck"; Description = "Monitors system health and performance."; Action = "cmd.exe"; Arguments = "/c echo System Health OK" },
-    @{ Name = "OneDrive Standalone Updater"; Description = "Updates the OneDrive sync client."; Action = "explorer.exe" },
-    @{ Name = "Microsoft Compatibility Telemetry"; Description = "Sends anonymous telemetry data to Microsoft."; Action = "control.exe" }
+    @{ Name = "OneDrive Standalone Updater"; Description = "Updates the OneDrive sync client."; Action = "explorer.exe"; Arguments = "" },
+    @{ Name = "Microsoft Compatibility Telemetry"; Description = "Sends anonymous telemetry data to Microsoft."; Action = "control.exe"; Arguments = "" }
 )
 
 $scheduledTaskObjects = @()
@@ -673,7 +716,13 @@ try {
     $selectedTasks = $taskPool | Get-Random -Count $randomscheduledtasks
 
     foreach ($task in $selectedTasks) {
-        $taskAction = New-ScheduledTaskAction -Execute $task.Action -Argument $task.Arguments
+        $taskActionParams = @{
+            Execute = $task.Action
+        }
+        if (-not [string]::IsNullOrEmpty($task.Arguments)) {
+            $taskActionParams['Argument'] = $task.Arguments
+        }
+        $taskAction = New-ScheduledTaskAction @taskActionParams
         $taskTrigger = New-ScheduledTaskTrigger -AtLogOn
         $taskPrincipal = New-ScheduledTaskPrincipal -UserId "NT AUTHORITY\SYSTEM" -RunLevel Highest
         Register-ScheduledTask -TaskName $task.Name -Action $taskAction -Trigger $taskTrigger -Principal $taskPrincipal -Description $task.Description -Force | Out-Null
