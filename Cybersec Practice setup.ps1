@@ -367,6 +367,7 @@ foreach ($program in $randomPrograms) {
         HardmodeDetection = ''
         Hardmode2DetectionType = ''
         Hardmode2Detection = ''
+        Forcewait = ''
     }
 }
 
@@ -403,6 +404,7 @@ foreach ($program in $randomUnauthorizedPrograms) {
         HardmodeDetection = ''
         Hardmode2DetectionType = ''
         Hardmode2Detection = ''
+        Forcewait = ''
     }
 }
 
@@ -440,6 +442,7 @@ foreach ($malware in $randomMalware) {
         HardmodeDetection = ''
         Hardmode2DetectionType = ''
         Hardmode2Detection = ''
+        Forcewait = $malware.Forcewait
     }
 }
 
@@ -480,6 +483,7 @@ foreach ($manualmalware in $RandomManualMalware) {
         HardmodeDetection = ''
         Hardmode2DetectionType = ''
         Hardmode2Detection = ''
+        Forcewait = ''
     }
 }
 
@@ -758,12 +762,6 @@ try {
 }
 #endregion
 
-#region Mark: Copy temp files to user profile
-Log-Message "Copying temp files to user profile temp directories for verification..." "INFO"
-Copy-Item -Path "$PSScriptRoot\Saltedfiles\*" -Destination "$env:LOCALAPPDATA\Microsoft\Edge\User Data\" -Recurse -Force
-
-#endregion
-
 #region MARK: Disable Windows Firewall
 Log-Message "Disabling Windows Firewall for testing purposes..." "INFO"
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
@@ -790,6 +788,8 @@ if ($skipProgramInstalls) {
             Log-Message "Installing $($program.Filename)..." "INFO"
             if ($programPath -like '*.msi') {
                 Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                $command = "msiexec.exe /I `"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
                     }else {
@@ -797,6 +797,8 @@ if ($skipProgramInstalls) {
                     }
             }else{
                 Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                $command = "`"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
                     }else {
@@ -804,6 +806,94 @@ if ($skipProgramInstalls) {
                     }
             }
             
+            # Custom wait logic for installers that exit immediately but have background processes.
+            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'True') {
+                $processName = $program.Filename -replace '\.exe$|\.msi$', ''
+                Log-Message "Forced wait enabled for [$($program.Filename)]. Process to monitor: [$processName]." "DEBUG"
+
+                Start-Sleep -Seconds 30 # Initial wait for the process to appear
+
+                $timeout = New-TimeSpan -Minutes 4
+                $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+                while ($stopwatch.Elapsed -lt $timeout) {
+                    $process = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                    if ($null -eq $process) {
+                        Log-Message "Process [$processName] is no longer running. Continuing script." "INFO"
+                        break
+                    }
+                    Log-Message "Process [$processName] is still running. Waiting 30 more seconds..." "DEBUG"
+                    Start-Sleep -Seconds 30
+                }
+
+                if ($stopwatch.Elapsed -ge $timeout) {
+                    Log-Message "Wait timeout of 4 minutes reached for process [$processName]. Continuing script." "WARN"
+                }
+                $stopwatch.Stop()
+            }
+
+            Log-Message "$($program.Filename) installation completed." "INFO"
+        }
+    }
+
+    # MARK: Install Unauthorized programs
+    Log-Message "Installing selected unauthorized programs..." "INFO"
+    $installed = Import-Csv -Path $installedCsv
+    Foreach ($program in $installed) {
+        if ($program.Type -eq 'unauthorized') {
+            $programPath = $program.OriginalPath
+            $wait = $program.Wait
+            $silentArgs = $program.Silent
+            if ($silentArgs -is [string] -and $silentArgs.StartsWith("'")) {
+                $silentArgs = $silentArgs.Substring(1)
+            }
+            Log-Message "Installing $($program.Filename)..." "INFO"
+            if ($programPath -like '*.msi') {
+                Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                $command = "msiexec.exe /I `"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
+                    }else {
+                        Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
+                    }
+            }else{
+                Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                $command = "`"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
+                    If ($wait -eq 'Wait') {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
+                    }else {
+                        Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                    }
+            }
+            
+            # Custom wait logic for installers that exit immediately but have background processes.
+            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'True') {
+                $processName = $program.Filename -replace '\.exe$|\.msi$', ''
+                Log-Message "Forced wait enabled for [$($program.Filename)]. Process to monitor: [$processName]." "DEBUG"
+
+                Start-Sleep -Seconds 30 # Initial wait for the process to appear
+
+                $timeout = New-TimeSpan -Minutes 4
+                $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+                while ($stopwatch.Elapsed -lt $timeout) {
+                    $process = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                    if ($null -eq $process) {
+                        Log-Message "Process [$processName] is no longer running. Continuing script." "INFO"
+                        break
+                    }
+                    Log-Message "Process [$processName] is still running. Waiting 30 more seconds..." "DEBUG"
+                    Start-Sleep -Seconds 30
+                }
+
+                if ($stopwatch.Elapsed -ge $timeout) {
+                    Log-Message "Wait timeout of 4 minutes reached for process [$processName]. Continuing script." "WARN"
+                }
+                $stopwatch.Stop()
+            }
+
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
     }
@@ -822,6 +912,8 @@ if ($skipProgramInstalls) {
             Log-Message "Installing $($program.Filename)..." "INFO"
             if ($programPath -like '*.msi') {
                 Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                $command = "msiexec.exe /I `"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
                     }else {
@@ -829,6 +921,8 @@ if ($skipProgramInstalls) {
                     }
             }else{
                 Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                $command = "`"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
                     }else {
@@ -836,6 +930,32 @@ if ($skipProgramInstalls) {
                     }
             }
             
+            # Custom wait logic for installers that exit immediately but have background processes.
+            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'True') {
+                $processName = $program.Filename -replace '\.exe$|\.msi$', ''
+                Log-Message "Forced wait enabled for [$($program.Filename)]. Process to monitor: [$processName]." "DEBUG"
+
+                Start-Sleep -Seconds 30 # Initial wait for the process to appear
+
+                $timeout = New-TimeSpan -Minutes 4
+                $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+                while ($stopwatch.Elapsed -lt $timeout) {
+                    $process = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                    if ($null -eq $process) {
+                        Log-Message "Process [$processName] is no longer running. Continuing script." "INFO"
+                        break
+                    }
+                    Log-Message "Process [$processName] is still running. Waiting 30 more seconds..." "DEBUG"
+                    Start-Sleep -Seconds 30
+                }
+
+                if ($stopwatch.Elapsed -ge $timeout) {
+                    Log-Message "Wait timeout of 4 minutes reached for process [$processName]. Continuing script." "WARN"
+                }
+                $stopwatch.Stop()
+            }
+
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
     }
@@ -854,18 +974,55 @@ if ($skipProgramInstalls) {
             Log-Message "Installing $($program.Filename)..." "INFO"
             if ($programPath -like '*.msi') {
                 Log-Message "MSI installer detected: $($program.Filename)" "DEBUG"
+                $command = "msiexec.exe /I `"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs" -Wait
                     }else {
+
                         Start-Process "msiexec.exe" -ArgumentList "/I `"$programPath`" $silentArgs"
                     }
             }else{
                 Log-Message "Executable installer detected: $($program.Filename)" "DEBUG"
+                $command = "`"$programPath`" $silentArgs"
+                Log-Message "Executing command: $command" "DEBUG"
                     If ($wait -eq 'Wait') {
                         Start-Process -FilePath $programPath -ArgumentList $silentArgs -Wait
                     }else {
-                        Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                        If ($forcewait -eq 'True')
+                        {
+                            Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                            
+                        }else {    
+                            Start-Process -FilePath $programPath -ArgumentList $silentArgs
+                        }
                     }
+            }
+
+            # Custom wait logic for installers that exit immediately but have background processes.
+            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'True') {
+                $processName = $program.Filename -replace '\.exe$|\.msi$', ''
+                Log-Message "Forced wait enabled for [$($program.Filename)]. Process to monitor: [$processName]." "DEBUG"
+
+                Start-Sleep -Seconds 30 # Initial wait for the process to appear
+
+                $timeout = New-TimeSpan -Minutes 4
+                $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+
+                while ($stopwatch.Elapsed -lt $timeout) {
+                    $process = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                    if ($null -eq $process) {
+                        Log-Message "Process [$processName] is no longer running. Continuing script." "INFO"
+                        break
+                    }
+                    Log-Message "Process [$processName] is still running. Waiting 30 more seconds..." "DEBUG"
+                    Start-Sleep -Seconds 30
+                }
+
+                if ($stopwatch.Elapsed -ge $timeout) {
+                    Log-Message "Wait timeout of 4 minutes reached for process [$processName]. Continuing script." "WARN"
+                }
+                $stopwatch.Stop()
             }
             
             Log-Message "$($program.Filename) installation completed." "INFO"

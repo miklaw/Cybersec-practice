@@ -222,6 +222,10 @@ $btnUpdateSelected.Add_Click({
         Log-Message "Update process cancelled: No updates were selected." "WARN"
         return
     }
+    If (!(Test-Path $updatecachelocation)) {
+        New-Item -ItemType Directory -Path $updatecachelocation | Out-Null
+        Log-Message "Created update cache directory at $updatecachelocation" "INFO"
+    }
 
     # --- Phase 1: Download all files ---
     $statusLabel.Text = "Phase 1: Downloading all selected files..."
