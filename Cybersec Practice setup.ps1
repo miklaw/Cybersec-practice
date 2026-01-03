@@ -4,8 +4,8 @@ param (
 )
 # --- DEBUGGING ---
 # Set to $true to skip the entire program installation section for faster testing.
-$skipProgramInstalls = $true
-$hidesplash = $true
+$skipProgramInstalls = $false # Set to $true to skip program installations
+$hidesplash = $false # Set to $true to hide the splash screen during setup
 $clearlog = "yes" # Set to "yes" to clear the log file on startup, "no" to append
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
 Write-Host "DEBUG: Defining Log-Message function..."
