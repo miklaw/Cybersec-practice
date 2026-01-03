@@ -1,7 +1,7 @@
 # Cybersecurity Training Start Script
 # Created by Mike Law
 # Creation Date: 2025-08-23
-# Last updated: 2025-10-18 
+# Last updated: 2026-01-03 
 # version 2025.10.18
 # Purpose: Allow users to update the scripts, programs, and trigger the setup as well as run the scoring script.
 
