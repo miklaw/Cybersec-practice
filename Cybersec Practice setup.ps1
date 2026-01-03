@@ -5,8 +5,10 @@ param (
 # --- DEBUGGING ---
 # Set to $true to skip the entire program installation section for faster testing.
 $skipProgramInstalls = $false # Set to $true to skip program installations
-$hidesplash = $false # Set to $true to hide the splash screen during setup
+$hidesplash = $true # Set to $true to hide the splash screen during setup
 $clearlog = "yes" # Set to "yes" to clear the log file on startup, "no" to append
+$programoverrides = $false # Set to $true to use program overrides from config\programoverrides.csv
+$programoverridesfile = Join-Path $PSScriptRoot 'config\programoverrides.csv' # Path to program overrides file
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
 Write-Host "DEBUG: Defining Log-Message function..."
 
@@ -361,21 +363,10 @@ if (Test-Path $tempUsersFile) {
 
 
 #region MARK: Program prep
-Log-Message "Selecting programs for installation..." "INFO"
-# Remove temp\programs directory if it exists
-if (Test-Path (Join-Path $tempDir 'programs')) {
-    Remove-Item -Path (Join-Path $tempDir 'programs') -Recurse -Force
-}
-
+Log-Message "Preparing program installation list..." "INFO"
 # Remove temp\installed.csv if it exists
 if (Test-Path (Join-Path $tempDir 'installed.csv')) {
     Remove-Item -Path (Join-Path $tempDir 'installed.csv') -Force
-}
-
-# Ensure temp\programs directory exists
-$tempProgramsDir = Join-Path $tempDir 'programs'
-if (-not (Test-Path $tempProgramsDir)) {
-    New-Item -Path $tempProgramsDir -ItemType Directory | Out-Null
 }
 
 # Initialize a master list to hold all programs and policies for the installed.csv
@@ -746,12 +737,13 @@ try {
 }
 #endregion
 
+#region MARK: Export installed.csv and enrich it with program config data
 # Export the combined list of programs and policies to installed.csv for the first time
 $installedCsv = Join-Path $tempDir 'installed.csv'
 $allProgramsAndPolicies | Export-Csv -Path $installedCsv -NoTypeInformation
 Log-Message "Initial export of all programs and policies to '$installedCsv'." "INFO"
 
-#region MARK: Enrich installed.csv with program config data (excluding Tempfiles)
+#MARK: Enrich installed.csv with program config data (excluding Tempfiles)
 Log-Message "Enriching installed.csv with data from $programsconfig" "INFO"
 # Import installed.csv and programs.xlsx
 $installed = Import-Csv -Path $installedCsv
@@ -775,6 +767,7 @@ foreach ($item in $programsToEnrich) {
         $item.HardmodeDetection = "$($programConfig.HardmodeDetection)"
         $item.Hardmode2DetectionType = $programConfig.Hardmode2DetectionType
         $item.Hardmode2Detection = "$($programConfig.Hardmode2Detection)"
+        $item.ForceWait = "$($programConfig.ForceWait)"
     }
 }
 
@@ -787,6 +780,18 @@ $installed | Export-Csv -Path $installedCsv -NoTypeInformation
 Log-Message "Final enriched installed.csv (programs and policies) exported." "INFO"
 #endregion
 
+#region Mark: Apply programoverrides from config\overrides.csv
+If ($programoverrides) {
+    Log-Message "Applying program overrides from $programoverrides..." "INFO"
+    if (Test-Path $programoverridesfile) {
+        copy-Item -Path $programoverridesfile -Destination $installedCsv -Force
+        Log-Message "Program overrides applied and installed.csv updated." "INFO"
+    } else {
+        Log-Message "Overrides file not found: $programoverridesfile" "WARN"
+    }
+} else {
+    Log-Message "Program overrides not enabled. Skipping overrides application." "INFO"
+}
 
 
 
@@ -823,7 +828,7 @@ Log-Message "Windows Firewall disabled for all profiles." "WARN"
 if ($skipProgramInstalls) {
     Log-Message "Skipping program installations as per `$skipProgramInstalls` setting." "WARN"
 } else {
-    # MARK: Install Safe programs
+    #region MARK: Install Safe programs
     Log-Message "Starting program installation phase..." "INFO"
     $installed = Import-Csv -Path $installedCsv
     Foreach ($program in $installed) {
@@ -884,8 +889,8 @@ if ($skipProgramInstalls) {
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
     }
-
-    # MARK: Install Unauthorized programs
+    #endregion
+    #region MARK: Install Unauthorized programs
     Log-Message "Installing selected unauthorized programs..." "INFO"
     $installed = Import-Csv -Path $installedCsv
     Foreach ($program in $installed) {
@@ -946,8 +951,8 @@ if ($skipProgramInstalls) {
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
     }
-
-    # MARK: Install Manual malware programs
+    #endregion
+    #region MARK: Install Manual malware programs
     Log-Message "Installing selected manual malware programs..." "INFO"
     $installed = Import-Csv -Path $installedCsv
     Foreach ($program in $installed) {
@@ -1008,8 +1013,8 @@ if ($skipProgramInstalls) {
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
     }
-
-    # MARK: Install Malware programs
+    #endregion
+    #region MARK: Install Malware programs
     Log-Message "Installing selected malware programs..." "INFO"
     $installed = Import-Csv -Path $installedCsv
     Foreach ($program in $installed) {
@@ -1049,7 +1054,7 @@ if ($skipProgramInstalls) {
             }
 
             # Custom wait logic for installers that exit immediately but have background processes.
-            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'True') {
+            if ($program.Wait -ne 'Wait' -and $program.ForceWait -eq 'Yes') {
                 $processName = $program.Filename -replace '\.exe$|\.msi$', ''
                 Log-Message "Forced wait enabled for [$($program.Filename)]. Process to monitor: [$processName]." "DEBUG"
 
@@ -1076,7 +1081,9 @@ if ($skipProgramInstalls) {
             
             Log-Message "$($program.Filename) installation completed." "INFO"
         }
-    }
+    } 
+    #endregion
+
     Log-Message "Finished program installations." "INFO"
 }
 #endregion
