@@ -53,7 +53,7 @@ $scoreFile = Join-Path $tempDir 'scores.csv'
 ##############################################################################################
 #endregion
 
-# MARK: Score File prep
+#region MARK: Score File prep
 Log-Message "Preparing score files..." "INFO"
 if (Test-Path $tempusersFile) {
     Log-Message "Found $tempusersFile" "DEBUG"
@@ -76,7 +76,7 @@ If (Test-path $scoreFile) {
 else {
     Log-Message "File $scoreFile not found." "INFO"
 }
-
+#endregion
 
 ##############################################################################################
 #region MARK: Software Scoring Logic
@@ -98,7 +98,6 @@ catch {
     Log-Message "Failed to import CSV file '$installedProgramsFile'. Error details: $($_.Exception.Message)" "ERROR"
     exit 1
 }
-
 
 # Initialize an empty array to hold the results of our checks.
 $scoreResults = @()
@@ -276,7 +275,7 @@ foreach ($program in $installedPrograms) {
 #endregion
 
 ##############################################################################################
-# Region MARK: User and Group Scoring Logic
+#region MARK: User and Group Scoring Logic
 ##############################################################################################
 Log-Message "Starting user and group scoring..." "INFO"
 
@@ -416,7 +415,7 @@ foreach ($user in $GeneratedUsers) {
 #endregion
 
 ##############################################################################################
-# Region MARK: Group Scoring Logic
+#region MARK: Group Scoring Logic
 ##############################################################################################
 Log-Message "Starting group scoring..." "INFO"
 
@@ -504,8 +503,6 @@ foreach ($group in $GeneratedGroups) {
 
 #endregion
 
-
-
 ##############################################################################################
 #region MARK: Firewall and Network Scoring
 ##############################################################################################
@@ -546,14 +543,13 @@ if ($null -ne $scoreResults -and $scoreResults.Count -gt 0) {
 } else {
     Log-Message "No results were generated to export. The output file will be empty." "WARN"
 }
-#endregion
 
 # Close the "in progress" form before showing the final scorecard.
 $progressForm.Close()
 $progressForm.Dispose()
+#endregion
 
-
-#MARK: GUI Score Display
+#region MARK: GUI Score Display
 # --- Create the Main Window ---
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Security Scorecard"
@@ -576,9 +572,9 @@ $instructionsLabel.ForeColor = "DarkGreen"
 $instructionsLabel.AutoSize = $true
 $instructionsLabel.Margin = "10, 10, 10, 10"
 $mainPanel.Controls.Add($instructionsLabel)
+#endregion
 
-
-# --- Read and Process the Data ---
+#region Mark: Read and Process the Data ---
 try {
     $data = Import-Csv -Path $scorefile
 }
@@ -587,10 +583,10 @@ catch {
     exit
 }
 
-# --- Group all data by Type for display ---
+# MARK: Group all data by Type for display ---
 $groupedData = $data | Group-Object -Property Type
 
-# --- Helper Function to Add a Data Section ---
+# MARK: Helper Function to Add a Data Section ---
 function Add-DataSection {
     param (
         [string]$sectionTitle,
@@ -617,7 +613,7 @@ function Add-DataSection {
     $dataGridView.ColumnHeadersDefaultCellStyle.Font = New-Object System.Drawing.Font("Arial", 11, [System.Drawing.FontStyle]::Bold)
     $dataGridView.ColumnHeadersDefaultCellStyle.Alignment = "MiddleCenter"
 
-# Change columns based on section type    
+# MARK: Change columns based on section type    
 $lowerTitle = $sectionTitle.ToLower()
 
 if ($lowerTitle.Contains("user")) {
@@ -693,13 +689,14 @@ else {
 
     $mainPanel.Controls.Add($dataGridView)
 }
+#endregion
 
-# --- Add All Sections from Grouped Data ---
+# MARK: Add All Sections from Grouped Data ---
 foreach ($group in $groupedData) {
     Add-DataSection -sectionTitle $group.Name.ToUpper() -sectionData $group.Group
 }
 
-# --- Calculate Totals ---
+#region MARK: Calculate Totals ---
 function Count-Checks {
     param ($items, $target)
     $count = 0
@@ -722,7 +719,7 @@ $totalMistakes   = Count-Checks ($allItems | Select-Object -ExpandProperty Resul
 
 $totalCombined = $totalscore + $totalmistakes
 
-# --- Add Total Label at the Bottom ---
+# MARK: Add Total Label at the Bottom ---
 $totalLabel = New-Object System.Windows.Forms.Label
 $totalLabel.Text = "Completed Total Score: $totalScore/$totalCombined"
 $totalLabel.Font = New-Object System.Drawing.Font("Arial", 12, [System.Drawing.FontStyle]::Bold)
@@ -730,16 +727,15 @@ $totalLabel.ForeColor = "DarkBlue"
 $totalLabel.AutoSize = $true
 $totalLabel.Margin = "10, 20, 10, 10"
 $mainPanel.Controls.Add($totalLabel)
+#endregion
 
-
-
-
-# --- Show the Final Window ---
+# MARK: Show the Final Window ---
 $form.ShowDialog()
 
     Log-Message "--- Finished Score Card Generation ---" "INFO"
 }
 
+#region MARK: Log the scores
 # This block ensures the script can be run directly.
 # It defines a basic logging function and then calls the main function.
 function Log-Message {
@@ -751,6 +747,7 @@ function Log-Message {
     $logFile = Join-Path $logDir 'score.log'
     "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [$type] $message" | Add-Content -Path $logFile
 }
+#endregion
 
 # Execute the main function of the script.
 Invoke-OpenScoreCard -PSScriptRoot $PSScriptRoot

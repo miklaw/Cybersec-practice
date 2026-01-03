@@ -5,10 +5,10 @@ param (
 # --- DEBUGGING ---
 # Set to $true to skip the entire program installation section for faster testing.
 $skipProgramInstalls = $false # Set to $true to skip program installations
-$hidesplash = $true # Set to $true to hide the splash screen during setup
+$hidesplash = $false # Set to $true to hide the splash screen during setup
 $clearlog = "yes" # Set to "yes" to clear the log file on startup, "no" to append
 $programoverrides = $false # Set to $true to use program overrides from config\programoverrides.csv
-$programoverridesfile = Join-Path $PSScriptRoot 'config\programoverrides.csv' # Path to program overrides file
+$programoverridesfile = Join-Path $PSScriptRoot 'config\installall.csv' # Path to program overrides file config\programoverrides.csv
 Write-Host "DEBUG: Cybersec Practice setup.ps1 script started."
 Write-Host "DEBUG: Defining Log-Message function..."
 
@@ -143,8 +143,6 @@ $manualmalwareProgramsDir = Join-Path $PSScriptRoot 'programs\manualmalware'
 $malwareProgramsDir = Join-Path $PSScriptRoot 'programs\malware'
 $safeProgramsDir = Join-Path $PSScriptRoot 'programs\safe'
 $unauthorizedProgramsDir = Join-Path $PSScriptRoot 'programs\unauthorized'
-
-
 #endregion
 
 
@@ -532,7 +530,7 @@ Log-Message "Manual malware selected: $($manualmalwareList.FriendlyName -join ',
 Log-Message "Adding temp files for verification from $programsconfig" "INFO"
 
 # Create the specific temporary file for removal check
-$tempFilePath = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\User Data\Default\Cache\CacheNotClear.txt"
+$tempFilePath = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\User Data\Default\Cache\Cache_Data\CacheNotClear.txt"
 $tempFileDir = Split-Path $tempFilePath -Parent
 Log-Message "Creating temporary file for removal check: $tempFilePath" "INFO"
 
@@ -689,8 +687,8 @@ Log-Message "Generating malicious scheduled tasks..." "INFO"
 
 # Define a pool of plausible but suspicious task details
 $taskPool = @(
-    @{ Name = "GoogleUpdateTaskMachineCore"; Description = "Keeps your Google software up to date."; Action = "calc.exe"; Arguments = "" },
-    @{ Name = "Adobe Flash Player Updater"; Description = "Checks for updates to Adobe Flash Player."; Action = "notepad.exe"; Arguments = "" },
+    @{ Name = "Automatic Browser Updater"; Description = "Keeps your Google software up to date."; Action = "calc.exe"; Arguments = "7" },
+    @{ Name = "Adobe Flash Player Updater"; Description = "Checks for updates to Adobe Flash Player."; Action = "notepad.exe"; Arguments = "3" },
     @{ Name = "Java Update Scheduler"; Description = "Checks for new versions of Java."; Action = "powershell.exe"; Arguments = "-Command Start-Sleep -Seconds 30" },
     @{ Name = "SystemHealthCheck"; Description = "Monitors system health and performance."; Action = "cmd.exe"; Arguments = "/c echo System Health OK" },
     @{ Name = "OneDrive Standalone Updater"; Description = "Updates the OneDrive sync client."; Action = "explorer.exe"; Arguments = "" },
@@ -1154,7 +1152,7 @@ $groupList
 The following programs have been authorized for installation:
 $programList
 
-The company demands that a password policy be enforced.  The current password policy settings are as follows:
+The company demands that a complex password policy be enforced.  The current password policy settings are as follows:
 - Minimum Password Length: $minPasswordLength characters
 - Maximum Password Age: $maxPasswordAge days
 - Minimum Password Age: $minPasswordAge days
