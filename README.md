@@ -2,7 +2,7 @@
 The scripts in this repository have been created for educational purposes so that you can quickly set up a random environment to test your skills at making a computer more secure. This is designed to help you practice on your own time for cyber security competitions such as Cyberpatriot.
 
 Quick start instructions:
-1. Download setup.ps1 to a Windows 11 virtual machine and put it in a folder location that is easy to access like c:\temp, then run it as administrator and update everything from the Updates page.  
+1. Download start.ps1 to a Windows 11 virtual machine and put it in a folder location that is easy to access like c:\temp, then run it as administrator and update everything from the Updates page.  
 2. Restart the script and click to install the Cybersec Prerequisites.
 3. Take a snapshot of the VM.
 4. Launch the script from the Desktop Shortcut.
